@@ -5173,15 +5173,18 @@ class WCNFPlus(WCNF, object):
         """
 
         def parse_wght(string):
-            wght = float(string)
-            return int(wght) if wght.is_integer() else decimal.Decimal(string)
+            if string == "h":
+                return self.topw
+            else:
+                wght = float(string)
+                return int(wght) if wght.is_integer() else decimal.Decimal(string)
 
         self.nv = 0
         self.hard = []
         self.atms = []
         self.soft = []
         self.wght = []
-        self.topw = 1
+        self.topw = decimal.Decimal("+inf")
         self.comments = []
         comment_lead = set(['p']).union(set(comment_lead))
 

@@ -800,3 +800,168 @@ class ITotalizer(object):
 
         # memory deallocation should not be done for the merged tree
         another._merged = True
+
+#
+#==============================================================================
+class ISeqCounter(object):
+    """This class implements an iterative sequential counter encoding. It attempts to match the interface of ITotalizer.
+    """
+    def __init__(self, lits=[], ubound=1, top_id=None):
+        """
+            Constructor.
+        """
+
+        # internal totalizer object
+        self.tobj = None
+
+        # its characteristics
+        self.lits = []
+        self.ubound = 0
+        self.top_id = 0
+
+        # encoding result
+        self.cnf = CNF()  # CNF formula encoding the totalizer object
+        self.rhs = []     # upper bounds on the number of literals (rhs)
+
+        # number of new clauses
+        self.nof_new = 0
+
+        # this newly created totalizer object is not yet merged in any other
+        self._merged = False
+
+        if lits:
+            self.new(lits=lits, ubound=ubound, top_id=top_id)
+
+    def new(self, lits=[], ubound=1, top_id=None):
+        """
+            The actual constructor of :class:`ITotalizer`. Invoked from
+            ``self.__init__()``. Creates an object of :class:`ITotalizer` given
+            a list of literals in the sum, the largest potential bound to
+            consider, as well as the top variable identifier used so far. See
+            the description of :class:`ITotalizer` for details.
+        """
+
+        self.lits = list(lits)
+        self.ubound = ubound
+        self.top_id = max(map(lambda x: abs(x), self.lits + [top_id if top_id != None else 0]))
+
+        # creating the object
+        self.tobj, clauses, self.rhs, self.top_id = pycard.iseq_new(self.lits,
+                self.ubound, self.top_id, int(MainThread.check()))
+
+        # saving the result
+        self.cnf.clauses = clauses
+        self.cnf.nv = self.top_id
+
+        # for convenience, keeping the number of clauses
+        self.nof_new = len(clauses)
+
+    def delete(self):
+        """
+            Destroys a previously constructed :class:`ITotalizer` object.
+            Internal variables ``self.cnf`` and ``self.rhs`` get cleaned.
+        """
+
+        if self.tobj:
+            if not self._merged:
+                pycard.iseq_del(self.tobj)
+
+                # otherwise, this totalizer object is merged into a larger one
+                # therefore, this memory should be freed in its destructor
+
+            self.tobj = None
+
+        self.lits = []
+        self.ubound = 0
+        self.top_id = 0
+
+        self.cnf = CNF()
+        self.rhs = []
+
+        self.nof_new = 0
+
+    def __enter__(self):
+        """
+            'with' constructor.
+        """
+
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        """
+            'with' destructor.
+        """
+
+        self.delete()
+
+    def __del__(self):
+        """
+            Destructor.
+        """
+
+        self.delete()
+
+    def increase(self, ubound=1, top_id=None):
+        """
+            Increases a potential upper bound that can be imposed on the
+            literals in the sum of an existing :class:`ITotalizer` object to a
+            new value.
+
+            :param ubound: a new upper bound.
+            :param top_id: a new top variable identifier.
+
+            :type ubound: int
+            :type top_id: integer or None
+
+            The top identifier ``top_id`` applied only if it is greater than
+            the one used in ``self``.
+
+            This method creates additional clauses encoding the existing
+            totalizer tree up to the new upper bound given and appends them to
+            the list of clauses of :class:`.CNF` ``self.cnf``. The number of
+            newly created clauses is stored in variable ``self.nof_new``.
+
+            Also, a list of bounds ``self.rhs`` gets increased and its length
+            becomes ``ubound+1``.
+
+            The method can be used in the following way:
+
+            .. code-block:: python
+
+                >>> from pysat.card import ITotalizer
+                >>> t = ITotalizer(lits=[1, 2, 3], ubound=1)
+                >>> print(t.cnf.clauses)
+                [[-2, 4], [-1, 4], [-1, -2, 5], [-4, 6], [-5, 7], [-3, 6], [-3, -4, 7]]
+                >>> print(t.rhs)
+                [6, 7]
+                >>>
+                >>> t.increase(ubound=2)
+                >>> print(t.cnf.clauses)
+                [[-2, 4], [-1, 4], [-1, -2, 5], [-4, 6], [-5, 7], [-3, 6], [-3, -4, 7], [-3, -5, 8]]
+                >>> print(t.cnf.clauses[-t.nof_new:])
+                [[-3, -5, 8]]
+                >>> print(t.rhs)
+                [6, 7, 8]
+                >>> t.delete()
+        """
+
+        self.top_id = max(self.top_id, top_id if top_id != None else 0)
+
+        # do nothing if the bound is set incorrectly
+        if ubound <= self.ubound or self.ubound >= len(self.lits):
+            self.nof_new = 0
+            return
+        else:
+            self.ubound = ubound
+
+        # updating the object and adding more variables and clauses
+        clauses, self.rhs, self.top_id = pycard.iseq_inc(self.tobj,
+                self.ubound, self.top_id, int(MainThread.check()))
+
+        # saving the result
+        self.cnf.clauses.extend(clauses)
+        self.cnf.nv = self.top_id
+
+        # keeping the number of newly added clauses
+        self.nof_new = len(clauses)
+

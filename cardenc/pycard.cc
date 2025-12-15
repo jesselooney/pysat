@@ -15,6 +15,7 @@
 
 #include "card.hh"
 #include "itot.hh"
+#include "iseq.hh"
 
 using namespace std;
 
@@ -33,6 +34,12 @@ static char itot_ext_docstring[] = "Extends the set of inputs in an iterative"
 				   " totalizer object.";
 static char itot_mrg_docstring[] = "Merge two totalizer objects into one.";
 static char itot_del_docstring[] = "Delete an iterative totalizer object";
+static char iseq_new_docstring[] = "Create an iterative sequential counter"
+                                   "object for an AtMost(k) constraint.";
+static char iseq_inc_docstring[] = "Increase bound in an iterative sequential"
+                                   "counter object";
+static char iseq_del_docstring[] = "Delete an iterative sequential counter"
+                                   "object";
 
 static PyObject *CardError;
 static jmp_buf env;
@@ -47,18 +54,24 @@ extern "C" {
 	static PyObject *py_itot_ext       (PyObject *, PyObject *);
 	static PyObject *py_itot_mrg       (PyObject *, PyObject *);
 	static PyObject *py_itot_del       (PyObject *, PyObject *);
+	static PyObject *py_iseq_new       (PyObject *, PyObject *);
+	static PyObject *py_iseq_inc       (PyObject *, PyObject *);
+	static PyObject *py_iseq_del       (PyObject *, PyObject *);
 }
 
 // module specification
 //=============================================================================
 static PyMethodDef module_methods[] = {
-	{ "encode_atmost",  py_encode_atmost,  METH_VARARGS,   atmost_docstring },
-	{ "encode_atleast", py_encode_atleast, METH_VARARGS,  atleast_docstring },
-	{ "itot_new",       py_itot_new,       METH_VARARGS, itot_new_docstring },
-	{ "itot_inc",       py_itot_inc,       METH_VARARGS, itot_inc_docstring },
-	{ "itot_ext",       py_itot_ext,       METH_VARARGS, itot_ext_docstring },
-	{ "itot_mrg",       py_itot_mrg,       METH_VARARGS, itot_mrg_docstring },
-	{ "itot_del",       py_itot_del,       METH_VARARGS, itot_del_docstring },
+	{ "encode_atmost",  py_encode_atmost,   METH_VARARGS,   atmost_docstring },
+	{ "encode_atleast", py_encode_atleast,  METH_VARARGS,  atleast_docstring },
+	{ "itot_new",       py_itot_new,        METH_VARARGS, itot_new_docstring },
+	{ "itot_inc",       py_itot_inc,        METH_VARARGS, itot_inc_docstring },
+	{ "itot_ext",       py_itot_ext,        METH_VARARGS, itot_ext_docstring },
+	{ "itot_mrg",       py_itot_mrg,        METH_VARARGS, itot_mrg_docstring },
+	{ "itot_del",       py_itot_del,        METH_VARARGS, itot_del_docstring },
+	{ "iseq_new",       py_iseq_new,        METH_VARARGS, iseq_new_docstring },
+	{ "iseq_inc",       py_iseq_inc,        METH_VARARGS, iseq_inc_docstring },
+	{ "iseq_del",       py_iseq_del,        METH_VARARGS, iseq_del_docstring },
 
 	{ NULL, NULL, 0, NULL }
 };
@@ -607,6 +620,145 @@ static PyObject *py_itot_mrg(PyObject *self, PyObject *args)
 //
 //=============================================================================
 static PyObject *py_itot_del(PyObject *self, PyObject *args)
+{
+	PyObject *t_obj;
+
+	if (!PyArg_ParseTuple(args, "O", &t_obj))
+		return NULL;
+
+	// get pointer to tree
+	TotTree *tree = (TotTree *)pyobj_to_void(t_obj);
+
+	// delete
+	itot_destroy(tree);
+
+	PyObject *ret = Py_BuildValue("");
+	return ret;
+}
+
+//
+//=============================================================================
+static PyObject *py_iseq_new(PyObject *self, PyObject *args)
+{
+	PyObject *lhs_obj;
+	int rhs;
+	int top;
+	int main_thread;
+
+	if (!PyArg_ParseTuple(args, "Oiii", &lhs_obj, &rhs, &top, &main_thread))
+		return NULL;
+
+	vector<int> lhs;
+	if (pyiter_to_vector(lhs_obj, lhs) == false)
+		return NULL;
+
+	PyOS_sighandler_t sig_save;
+	if (main_thread) {
+		sig_save = PyOS_setsig(SIGINT, sigint_handler);
+
+		if (setjmp(env) != 0) {
+			PyErr_SetString(CardError, "Caught keyboard interrupt");
+			return NULL;
+		}
+	}
+
+	// calling encoder
+	ClauseSet dest;
+	TotTree *tree = itot_new(dest, lhs, rhs, top);
+
+	if (main_thread)
+		PyOS_setsig(SIGINT, sig_save);
+
+	// creating the resulting clause set
+	PyObject *dest_obj = PyList_New(dest.size());
+	for (size_t i = 0; i < dest.size(); ++i) {
+		PyObject *cl_obj = PyList_New(dest[i].size());
+
+		for (size_t j = 0; j < dest[i].size(); ++j) {
+			PyObject *lit_obj = pyint_from_cint(dest[i][j]);
+			PyList_SetItem(cl_obj, j, lit_obj);
+		}
+
+		PyList_SetItem(dest_obj, i, cl_obj);
+	}
+
+	// creating the upper-bounds (right-hand side)
+	PyObject *ubs_obj = PyList_New(tree->vars.size());
+	for (size_t i = 0; i < tree->vars.size(); ++i) {
+		PyObject *ub_obj = pyint_from_cint(tree->vars[i]);
+		PyList_SetItem(ubs_obj, i, ub_obj);
+	}
+
+	PyObject *ret = Py_BuildValue("OOOn", void_to_pyobj((void *)tree),
+				dest_obj, ubs_obj, (Py_ssize_t)top);
+
+	Py_DECREF(dest_obj);
+	Py_DECREF( ubs_obj);
+	return ret;
+}
+
+//
+//=============================================================================
+static PyObject *py_iseq_inc(PyObject *self, PyObject *args)
+{
+	PyObject *t_obj;
+	int rhs;
+	int top;
+	int main_thread;
+
+	if (!PyArg_ParseTuple(args, "Oiii", &t_obj, &rhs, &top, &main_thread))
+		return NULL;
+
+	// get pointer to tree
+	TotTree *tree = (TotTree *)pyobj_to_void(t_obj);
+
+	PyOS_sighandler_t sig_save;
+	if (main_thread) {
+		sig_save = PyOS_setsig(SIGINT, sigint_handler);
+
+		if (setjmp(env) != 0) {
+			PyErr_SetString(CardError, "Caught keyboard interrupt");
+			return NULL;
+		}
+	}
+
+	// calling encoder
+	ClauseSet dest;
+	itot_increase(tree, dest, rhs, top);
+
+	if (main_thread)
+		PyOS_setsig(SIGINT, sig_save);
+
+	// creating the resulting clause set
+	PyObject *dest_obj = PyList_New(dest.size());
+	for (size_t i = 0; i < dest.size(); ++i) {
+		PyObject *cl_obj = PyList_New(dest[i].size());
+
+		for (size_t j = 0; j < dest[i].size(); ++j) {
+			PyObject *lit_obj = pyint_from_cint(dest[i][j]);
+			PyList_SetItem(cl_obj, j, lit_obj);
+		}
+
+		PyList_SetItem(dest_obj, i, cl_obj);
+	}
+
+	// creating the upper-bounds (right-hand side)
+	PyObject *ubs_obj = PyList_New(tree->vars.size());
+	for (size_t i = 0; i < tree->vars.size(); ++i) {
+		PyObject *ub_obj = pyint_from_cint(tree->vars[i]);
+		PyList_SetItem(ubs_obj, i, ub_obj);
+	}
+
+	PyObject *ret = Py_BuildValue("OOn", dest_obj, ubs_obj, (Py_ssize_t)top);
+
+	Py_DECREF(dest_obj);
+	Py_DECREF( ubs_obj);
+	return ret;
+}
+
+//
+//=============================================================================
+static PyObject *py_iseq_del(PyObject *self, PyObject *args)
 {
 	PyObject *t_obj;
 

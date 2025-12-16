@@ -842,8 +842,15 @@ class ISeqCounter(object):
         """
 
         self.lits = list(lits)
-        self.ubound = ubound
         self.top_id = max(map(lambda x: abs(x), self.lits + [top_id if top_id != None else 0]))
+
+        # Fail if the bound is negative. ITotalizer does not do this, but I am
+        # not sure how or if it is handling it lower down the chain, so I will
+        # stop it here.
+        if ubound < 0:
+            raise ValueError("`ubound` cannot be negative")
+        else:
+            self.ubound = ubound
 
         # creating the object
         self.tobj, clauses, self.rhs, self.top_id = pycard.iseq_new(self.lits,

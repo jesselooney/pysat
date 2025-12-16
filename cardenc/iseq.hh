@@ -1,0 +1,127 @@
+/*
+ * iseq.hh
+ *
+ *  Created on: Dec 15, 2025
+ *      Author: Jesse Looney
+ *      E-mail: jesselooney+dev@pm.me
+ */
+
+#ifndef ISEQ_HH_ // TODO: Change to correct thing once we rename stuff
+#define ISEQ_HH_
+
+#include <algorithm>
+#include <cmath>
+#include <vector>
+#include <deque>
+#include "clset.hh"
+
+using namespace std;
+
+struct SeqState {
+    vector<int> lhs;
+    vector<int> rhs;
+    Pair2IntMap s_vars;
+};
+
+// Create an at-most-0 constraint in an instantiated sequential counters state.
+// This must always be the first constraint added.
+//=============================================================================
+void _iseq_add_atmost0(SeqState *state, ClauseSet& dest, int& top)
+{
+    assert(rhs.size() == 0);
+    assert(lhs.size() > 0);
+
+    int n = state->lhs.size();
+
+    // s_1^1 <-> x_0, so we might as well avoid creating the extra variable
+    // and clause by reusing x_0.
+    state->s_vars.insert(make_pair(make_pair(1, 1), state->lhs[0]));
+
+    for (int j = 1; j < n; j++) {
+        int s1j1 = mk_yvar(top, state->s_vars, make_pair(1, j + 1));
+        int s1j  = mk_yvar(top, state->s_vars, make_pair(1, j));
+        int xj   = state->lhs[j];
+        // s_1^(j+1) <-- s_1^j v x_j
+        dest.create_binary_clause(-s1j, s1j1);
+        dest.create_binary_clause(-xj, s1j1);
+    }
+
+    int s1n = mk_yvar(top, state->s_vars, make_pair(1, n));
+    state->rhs.push_back(s1n);
+}
+
+// Create an at-most-k constraint in an instantiated sequential counters state.
+// This must always be the (k+1)-th constraint added.
+//=============================================================================
+void _iseq_add_atmostk(SeqState *state, ClauseSet& dest, int& top, unsigned k)
+{
+    assert(rhs.size() == k);
+    assert(lhs.size() > k);
+
+    int n = state->lhs.size();
+
+    int sk1k1 = mk_yvar(top, state->s_vars, make_pair(k + 1, k + 1));
+    int skk   = mk_yvar(top, state->s_vars, make_pair(k, k));
+    int xk    = state->lhs[k];
+    // s_(k+1)^(k+1) <-- s_k^k ^ x_k
+    dest.create_ternary_clause(-skk, -xk, sk1k1);
+
+    for (int j = k + 1; j < n; j++) {
+        int sk1j1 = mk_yvar(top, state->s_vars, make_pair(k + 1, j + 1));
+        int sk1j  = mk_yvar(top, state->s_vars, make_pair(k + 1, j));
+        int skj   = mk_yvar(top, state->s_vars, make_pair(k, j));
+        int xj    = state->lhs[j];
+        // s_(k+1)^(j+1) <-- s_(k+1)^j v (s_k^j ^ x_j)
+        dest.create_binary_clause(-sk1j, sk1j1);
+        dest.create_ternary_clause(-skj, -xj, sk1j1);
+    }
+
+    int sk1n = mk_yvar(top, state->s_vars, make_pair(k + 1, n));
+    state->rhs.push_back(sk1n);
+}
+
+//
+//=============================================================================
+SeqState *iseq_new(ClauseSet& dest, vector<int>& lhs, long unsigned rhs, int& top)
+{
+    SeqState *state = new SeqState();
+    state->lhs = lhs;
+
+    unsigned kmin = std::min(rhs + 1, state->lhs.size());
+    state->rhs.reserve(kmin);
+
+    for (unsigned i = 0; i < kmin; i++) {
+        if (i == 0) {
+            _iseq_add_atmost0(state, dest, top);
+        } else {
+            _iseq_add_atmostk(state, dest, top, i);
+        }
+    }
+
+    return state;
+}
+
+//
+//=============================================================================
+void iseq_increase(SeqState *state, ClauseSet& dest, long unsigned rhs, int& top)
+{
+    unsigned kmin = std::min(rhs + 1, state->lhs.size());
+    state->rhs.reserve(kmin);
+
+    for (unsigned i = state->rhs.size(); i < kmin; i++) {
+        if (i == 0) {
+            _iseq_add_atmost0(state, dest, top);
+        } else {
+            _iseq_add_atmostk(state, dest, top, i);
+        }
+    }
+}
+
+//
+//=============================================================================
+static void iseq_destroy(SeqState *state)
+{
+	delete state;
+}
+
+#endif // ISEQ_HH_

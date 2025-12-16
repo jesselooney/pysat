@@ -664,7 +664,7 @@ static PyObject *py_iseq_new(PyObject *self, PyObject *args)
 
 	// calling encoder
 	ClauseSet dest;
-	TotTree *tree = itot_new(dest, lhs, rhs, top);
+	SeqState *state = iseq_new(dest, lhs, rhs, top);
 
 	if (main_thread)
 		PyOS_setsig(SIGINT, sig_save);
@@ -683,13 +683,13 @@ static PyObject *py_iseq_new(PyObject *self, PyObject *args)
 	}
 
 	// creating the upper-bounds (right-hand side)
-	PyObject *ubs_obj = PyList_New(tree->vars.size());
-	for (size_t i = 0; i < tree->vars.size(); ++i) {
-		PyObject *ub_obj = pyint_from_cint(tree->vars[i]);
+	PyObject *ubs_obj = PyList_New(state->rhs.size());
+	for (size_t i = 0; i < state->rhs.size(); ++i) {
+		PyObject *ub_obj = pyint_from_cint(state->rhs[i]);
 		PyList_SetItem(ubs_obj, i, ub_obj);
 	}
 
-	PyObject *ret = Py_BuildValue("OOOn", void_to_pyobj((void *)tree),
+	PyObject *ret = Py_BuildValue("OOOn", void_to_pyobj((void *)state),
 				dest_obj, ubs_obj, (Py_ssize_t)top);
 
 	Py_DECREF(dest_obj);
@@ -709,8 +709,8 @@ static PyObject *py_iseq_inc(PyObject *self, PyObject *args)
 	if (!PyArg_ParseTuple(args, "Oiii", &t_obj, &rhs, &top, &main_thread))
 		return NULL;
 
-	// get pointer to tree
-	TotTree *tree = (TotTree *)pyobj_to_void(t_obj);
+	// get pointer to state
+	SeqState *state = (SeqState *)pyobj_to_void(t_obj);
 
 	PyOS_sighandler_t sig_save;
 	if (main_thread) {
@@ -724,7 +724,7 @@ static PyObject *py_iseq_inc(PyObject *self, PyObject *args)
 
 	// calling encoder
 	ClauseSet dest;
-	itot_increase(tree, dest, rhs, top);
+	iseq_increase(state, dest, rhs, top);
 
 	if (main_thread)
 		PyOS_setsig(SIGINT, sig_save);
@@ -743,9 +743,9 @@ static PyObject *py_iseq_inc(PyObject *self, PyObject *args)
 	}
 
 	// creating the upper-bounds (right-hand side)
-	PyObject *ubs_obj = PyList_New(tree->vars.size());
-	for (size_t i = 0; i < tree->vars.size(); ++i) {
-		PyObject *ub_obj = pyint_from_cint(tree->vars[i]);
+	PyObject *ubs_obj = PyList_New(state->rhs.size());
+	for (size_t i = 0; i < state->rhs.size(); ++i) {
+		PyObject *ub_obj = pyint_from_cint(state->rhs[i]);
 		PyList_SetItem(ubs_obj, i, ub_obj);
 	}
 
@@ -765,11 +765,11 @@ static PyObject *py_iseq_del(PyObject *self, PyObject *args)
 	if (!PyArg_ParseTuple(args, "O", &t_obj))
 		return NULL;
 
-	// get pointer to tree
-	TotTree *tree = (TotTree *)pyobj_to_void(t_obj);
+	// get pointer to state
+	SeqState *state = (SeqState *)pyobj_to_void(t_obj);
 
 	// delete
-	itot_destroy(tree);
+	iseq_destroy(state);
 
 	PyObject *ret = Py_BuildValue("");
 	return ret;

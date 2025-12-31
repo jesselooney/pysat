@@ -651,12 +651,6 @@ class RC2(object):
                 print('c cost: {0}; core sz: {1}; soft sz: {2}'.format(self.cost,
                     len(self.core), len(self.sels) + len(self.sums)))
         
-        print(f"compute_: SATISFIABLE with model {self.oracle.get_model()}")
-        print("sels, sums, wght")
-        print(self.sels)
-        print(self.sums)
-        print(self.wght)
-
         return True
 
     def get_core(self):
@@ -707,14 +701,6 @@ class RC2(object):
             variables. The totalizer object can be "exhausted"
             depending on the option.
         """
-        print("sels, sums, core, core_sels, core_sums, wght")
-        print(self.sels)
-        print(self.sums)
-        print(self.core)
-        print(self.core_sels)
-        print(self.core_sums)
-        print(self.wght)
-
         # updating the cost
         self.cost += self.minw
 
@@ -729,10 +715,11 @@ class RC2(object):
                 # create a new cardunality constraint
                 t = self.create_sum()
 
+                # TODO: implement core exhaustion
+
                 if self.exhaust:
                     raise Exception("core exhaustion not yet supported")
 
-                # TODO: implement core exhaustion
                 ## apply core exhaustion if required
                 #b = self.exhaust_core(t) if self.exhaust else 1
 
@@ -1090,11 +1077,6 @@ class RC2(object):
         prefixes = self.prefix_lists[sobj]
         prefix_len, marginal_weight = prefixes[prefix]
 
-        print(f"reveal_sum_assump: {prefix=}")
-        print(f"reveal_sum_assump: {bound=}")
-        print(f"reveal_sum_assump: {prefix_len=}")
-        print(f"reveal_sum_assump: {marginal_weight=}")
-      
         assert prefix_len <= len(sobj.lits)
 
         if bound >= prefix_len:
@@ -1115,7 +1097,6 @@ class RC2(object):
         self.wght[-lit] = marginal_weight
         self.swgt[-lit] = marginal_weight
 
-        print(f"reveal_sum_assump: adding lit {-lit}")
         # Add the assumption as an enforced constraint.
         self.sums.append(-lit)
 
@@ -1169,14 +1150,9 @@ class RC2(object):
                     prefixes.append((i + 1, weight - weights[i + 1]))
             prefixes.append((len(weights), self.minw))
 
-            print(f"create_sum: {self.rels=}")
-            print(f"create_sum: {prefixes=}")
-
             # new totalizer sum
             t = ISeqCounter(lits=self.rels, ubound=bound, top_id=self.pool.top)
             
-            print(f"create_sum: {t.cnf.clauses=}")
-
             # updating top variable id
             self.pool.top = t.top_id
 
@@ -1640,87 +1616,6 @@ class RC2Stratified(RC2, object):
         # removing unnecessary assumptions
         self.filter_assumps()
 
-    def process_sels(self):
-        """
-            A redefined version of :func:`RC2.process_sels`. The only
-            modification affects the clauses whose weight after
-            splitting becomes less than the weight of the current
-            optimization level. Such clauses are deactivated and to be
-            reactivated at a later stage.
-        """
-
-        # new relaxation variables
-        self.rels = []
-
-        # selectors that should be deactivated (but not removed completely)
-        to_deactivate = set([])
-
-        for l in self.core_sels:
-            if self.wght[l] == self.minw:
-                # marking variable as being a part of the core
-                # so that next time it is not used as an assump
-                self.garbage.add(l)
-            else:
-                # do not remove this variable from assumps
-                # since it has a remaining non-zero weight
-                self.wght[l] -= self.minw
-
-                # deactivate this assumption and put at a lower level
-                # if self.done != -1, i.e. if stratification is disabled
-                if self.done != -1 and self.wght[l] < self.blop[self.levl]:
-                    self.wstr[self.wght[l]].append(l)
-                    to_deactivate.add(l)
-
-            # reuse assumption variable as relaxation
-            self.rels.append(-l)
-
-        # deactivating unnecessary selectors
-        self.sels = [l for l in self.sels if l not in to_deactivate]
-
-    def process_sums(self):
-        """
-            A redefined version of :func:`RC2.process_sums`. The only
-            modification affects the clauses whose weight after
-            splitting becomes less than the weight of the current
-            optimization level. Such clauses are deactivated and to be
-            reactivated at a later stage.
-        """
-
-        # sums that should be deactivated (but not removed completely)
-        to_deactivate = set([])
-
-        for l in self.core_sums:
-            if self.wght[l] == self.minw:
-                # marking variable as being a part of the core
-                # so that next time it is not used as an assump
-                self.garbage.add(l)
-            else:
-                # do not remove this variable from assumps
-                # since it has a remaining non-zero weight
-                self.wght[l] -= self.minw
-
-                # deactivate this assumption and put at a lower level
-                # if self.done != -1, i.e. if stratification is disabled
-                if self.done != -1 and self.wght[l] < self.blop[self.levl]:
-                    self.wstr[self.wght[l]].append(l)
-                    to_deactivate.add(l)
-
-            # increase bound for the sum
-            t, b = self.update_sum(l)
-
-            # updating bounds and weights
-            if b < len(t.rhs):
-                lnew = -t.rhs[b]
-                if lnew not in self.swgt:
-                    self.set_bound(t, b, self.swgt[l])
-
-            # put this assumption to relaxation vars
-            self.rels.append(-l)
-
-        # deactivating unnecessary sums
-        self.sums = [l for l in self.sums if l not in to_deactivate]
-
-
 #
 #==============================================================================
 def parse_options():
@@ -1860,11 +1755,16 @@ if __name__ == '__main__':
 
         # deciding whether or not to stratify
         if blo != 'none' and max(formula.wght) > min(formula.wght):
-            print("using stratification")
+            print("c using stratification")
             MXS = RC2Stratified
         else:
-            print("not using stratification")
+            print("c not using stratification")
             MXS = RC2
+
+        # TODO: implement exhaustion
+        if exhaust:
+            print("c WARNING: core exhaustion enabled but not currently supported; defaulting to no exhaustion")
+            exhaust = False
 
         # starting the solver
         with MXS(formula, solver=solver, adapt=adapt, exhaust=exhaust,

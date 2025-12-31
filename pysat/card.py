@@ -972,3 +972,12 @@ class ISeqCounter(object):
         # keeping the number of newly added clauses
         self.nof_new = len(clauses)
 
+    def get_constraint(self, prefix_len, bound):
+        """
+            Get the literal whose negation requires that the first `prefix_len`
+            lits of `self.lits` sum to at most `bound`.
+        """
+        if 0 <= bound < len(self.rhs) and bound < prefix_len <= len(self.lits):
+            return pycard.iseq_get(self.tobj,
+                prefix_len, bound, int(MainThread.check()))
+

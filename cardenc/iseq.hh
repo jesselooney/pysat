@@ -6,7 +6,7 @@
  *      E-mail: jesselooney+dev@pm.me
  */
 
-#ifndef ISEQ_HH_ // TODO: Change to correct thing once we rename stuff
+#ifndef ISEQ_HH_
 #define ISEQ_HH_
 
 #include <algorithm>
@@ -19,7 +19,13 @@ using namespace std;
 
 struct SeqState {
     vector<int> lhs;
+    // We maintain the invariant that `rhs.size() < lhs.size()`.
     vector<int> rhs;
+    // A map from pairs of integers to SAT literals (encoded as integers).
+    // We maintain the invariant that, for `1 <= i <= rhs.size()` and
+    // `i <= j <= lhs.size()`, `s_vars` contains the key `(i, j)`, and the
+    // corresponding element is a literal whose negation requires that the sum
+    // of the first `j` literals of `lhs` is at most `i - 1`.
     Pair2IntMap s_vars;
 };
 
@@ -115,6 +121,19 @@ void iseq_increase(SeqState *state, ClauseSet& dest, long unsigned rhs, int& top
             _iseq_add_atmostk(state, dest, top, i);
         }
     }
+}
+
+//
+//=============================================================================
+int iseq_get(SeqState *state, int prefix_len, long unsigned rhs) {
+    assert(0 <= rhs);
+    assert(rhs < rhs.size());
+
+    assert(rhs < prefix_len);
+    assert(prefix_len <= lhs.size());
+
+    // The above assertions ensure that this key exists in the map.
+    return state->s_vars.at(make_pair(rhs + 1, prefix_len));
 }
 
 //

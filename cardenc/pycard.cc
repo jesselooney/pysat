@@ -38,8 +38,8 @@ static char iseq_new_docstring[] = "Create an iterative sequential counter"
                                    "object for an AtMost(k) constraint.";
 static char iseq_inc_docstring[] = "Increase bound in an iterative sequential"
                                    "counter object";
-static char iseq_del_docstring[] = "Delete an iterative sequential counter"
-                                   "object";
+static char iseq_del_docstring[] = "Delete an iterative sequential counter";
+static char iseq_get_docstring[] = "Get a constraint for an iterative sequential counter";
 
 static PyObject *CardError;
 static jmp_buf env;
@@ -57,6 +57,7 @@ extern "C" {
 	static PyObject *py_iseq_new       (PyObject *, PyObject *);
 	static PyObject *py_iseq_inc       (PyObject *, PyObject *);
 	static PyObject *py_iseq_del       (PyObject *, PyObject *);
+	static PyObject *py_iseq_get       (PyObject *, PyObject *);
 }
 
 // module specification
@@ -72,6 +73,7 @@ static PyMethodDef module_methods[] = {
 	{ "iseq_new",       py_iseq_new,        METH_VARARGS, iseq_new_docstring },
 	{ "iseq_inc",       py_iseq_inc,        METH_VARARGS, iseq_inc_docstring },
 	{ "iseq_del",       py_iseq_del,        METH_VARARGS, iseq_del_docstring },
+	{ "iseq_get",       py_iseq_get,        METH_VARARGS, iseq_get_docstring },
 
 	{ NULL, NULL, 0, NULL }
 };
@@ -753,6 +755,42 @@ static PyObject *py_iseq_inc(PyObject *self, PyObject *args)
 
 	Py_DECREF(dest_obj);
 	Py_DECREF( ubs_obj);
+	return ret;
+}
+
+//
+//=============================================================================
+static PyObject *py_iseq_get(PyObject *self, PyObject *args)
+{
+	PyObject *t_obj;
+	int prefix_len;
+	int bound;
+	int main_thread;
+
+	if (!PyArg_ParseTuple(args, "Oiii", &t_obj, &prefix_len, &bound, &main_thread))
+		return NULL;
+
+	// get pointer to state
+	SeqState *state = (SeqState *)pyobj_to_void(t_obj);
+
+	PyOS_sighandler_t sig_save;
+	if (main_thread) {
+		sig_save = PyOS_setsig(SIGINT, sigint_handler);
+
+		if (setjmp(env) != 0) {
+			PyErr_SetString(CardError, "Caught keyboard interrupt");
+			return NULL;
+		}
+	}
+
+	// calling encoder
+	int lit = iseq_get(state, prefix_len, bound);
+
+	if (main_thread)
+		PyOS_setsig(SIGINT, sig_save);
+
+	PyObject *ret = Py_BuildValue("i", lit);
+
 	return ret;
 }
 

@@ -39,9 +39,11 @@ void _iseq_add_atmost0(SeqState *state, ClauseSet& dest, int& top)
 
     int n = state->lhs.size();
 
-    // s_1^1 <-> x_0, so we might as well avoid creating the extra variable
-    // and clause by reusing x_0.
-    state->s_vars.insert(make_pair(make_pair(1, 1), state->lhs[0]));
+    // s_1^1 <-- x_0. We could just reuse the literal for x_0, but it is better
+    // to have our own copy. Some use cases assume this behavior.
+    int s11 = mk_yvar(top, state->s_vars, make_pair(1, 1));
+    int x0 = state->lhs[0];
+    dest.create_binary_clause(-x0, s11);
 
     for (int j = 1; j < n; j++) {
         int s1j1 = mk_yvar(top, state->s_vars, make_pair(1, j + 1));

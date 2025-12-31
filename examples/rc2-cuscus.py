@@ -650,6 +650,12 @@ class RC2(object):
             if self.verbose > 1:
                 print('c cost: {0}; core sz: {1}; soft sz: {2}'.format(self.cost,
                     len(self.core), len(self.sels) + len(self.sums)))
+        
+        print(f"compute_: SATISFIABLE with model {self.oracle.get_model()}")
+        print("sels, sums, wght")
+        print(self.sels)
+        print(self.sums)
+        print(self.wght)
 
         return True
 
@@ -701,6 +707,13 @@ class RC2(object):
             variables. The totalizer object can be "exhausted"
             depending on the option.
         """
+        print("sels, sums, core, core_sels, core_sums, wght")
+        print(self.sels)
+        print(self.sums)
+        print(self.core)
+        print(self.core_sels)
+        print(self.core_sums)
+        print(self.wght)
 
         # updating the cost
         self.cost += self.minw
@@ -1039,29 +1052,30 @@ class RC2(object):
             # Mark the literal as garbage (and omit cloning).
             self.garbage.add(l)
 
+            # Get the sequential counters associated with the literal
+            sobj = self.tobj[l]
+
+            # Get the index of the literal. That is, over which prefix of the
+            # core the sum is taken, as well as the upper bound on the sum.
+            prefix, bound = self.sum_indices[l]
+
             # Handle relaxing the constraint.
-            self.relax_sum(l)
+            self.reveal_redundant_sum_assumps(sobj, prefix, bound)
 
             # put this assumption to relaxation vars
             self.rels.append(-l)
 
-    def relax_sum(self, assump):
+    def reveal_redundant_sum_assumps(self, sobj, prefix, bound):
         """
             Handle relaxing a sum assumption by revealing (introducing) any
             sum assumptions that were previously implied by it but may no
             longer be redundant after removing it.
         """
-        # Get the sequential counters associated with the assumption
-        s = self.tobj[assump]
-
-        # Get the index of the assumption. That is, over which prefix of the
-        # core the sum is taken, as well as the upper bound on the sum.
-        prefix, bound = self.sum_indices[assump]
 
         # Eagerly reveal the two assumptions this sum immediately implies.
-        self.reveal_sum_assump(s, prefix, bound + 1)
+        self.reveal_sum_assump(sobj, prefix, bound + 1)
         if prefix >= 1:
-            self.reveal_sum_assump(s, prefix - 1, bound)
+            self.reveal_sum_assump(sobj, prefix - 1, bound)
 
     def reveal_sum_assump(self, sobj, prefix, bound):
         """
@@ -1075,6 +1089,11 @@ class RC2(object):
 
         prefixes = self.prefix_lists[sobj]
         prefix_len, marginal_weight = prefixes[prefix]
+
+        print(f"reveal_sum_assump: {prefix=}")
+        print(f"reveal_sum_assump: {bound=}")
+        print(f"reveal_sum_assump: {prefix_len=}")
+        print(f"reveal_sum_assump: {marginal_weight=}")
       
         assert prefix_len <= len(sobj.lits)
 
@@ -1096,6 +1115,7 @@ class RC2(object):
         self.wght[-lit] = marginal_weight
         self.swgt[-lit] = marginal_weight
 
+        print(f"reveal_sum_assump: adding lit {-lit}")
         # Add the assumption as an enforced constraint.
         self.sums.append(-lit)
 
@@ -1136,6 +1156,8 @@ class RC2(object):
             cardinality constraints are used instead of
             :class:`.ITotalizer`.
         """
+        if bound != 1:
+            raise Exception("create_sum not implemented for bound != 1")
 
         if not self.oracle.supports_atmost():  # standard totalizer-based encoding
             # Compute the prefixes of the core.
@@ -1147,8 +1169,13 @@ class RC2(object):
                     prefixes.append((i + 1, weight - weights[i + 1]))
             prefixes.append((len(weights), self.minw))
 
+            print(f"create_sum: {self.rels=}")
+            print(f"create_sum: {prefixes=}")
+
             # new totalizer sum
             t = ISeqCounter(lits=self.rels, ubound=bound, top_id=self.pool.top)
+            
+            print(f"create_sum: {t.cnf.clauses=}")
 
             # updating top variable id
             self.pool.top = t.top_id
@@ -1158,7 +1185,13 @@ class RC2(object):
                 self.oracle.add_clause(cl)
     
             self.prefix_lists[t] = prefixes
-            self.reveal_sum_assump(t, len(prefixes) - 1, bound)
+
+            # We know that at least one relaxation literal must be true (or
+            # else we wouldn't have gotten this core), so the implicit
+            # at-most-0 constraint is falsified. We therefore add the (one or
+            # two) next constraints that become relevant after "removing" the
+            # at-most-0 constraint.
+            self.reveal_redundant_sum_assumps(t, len(prefixes) - 1, 0)
         else:
             raise Exception("Intended for testing on solvers without native cardinality constraints.")
 

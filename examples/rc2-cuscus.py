@@ -1609,6 +1609,44 @@ class RC2Stratified(RC2, object):
 
         self.filter_assumps()
 
+    def reveal_sum_assump(self, sobj, prefix, bound):
+        """
+            A redefined version of :func:`RC1.reveal_sum_assump`. The only
+            modification is to add the new assumption literal to the correct
+            optimization level.
+        """
+        assert bound >= 0
+
+        prefixes = self.prefix_lists[sobj]
+        prefix_len, marginal_weight = prefixes[prefix]
+
+        assert prefix_len <= len(sobj.lits)
+
+        if bound >= prefix_len:
+            # The desired constraint is trivial, so we omit adding it.
+            return
+
+        # Get `lit` such that `-lit` requires that the first `prefix_len`
+        # literals of the core sum to at most `bound`.
+        lit = self.get_sum_assumption(sobj, prefix_len, bound)
+
+        if -lit in self.swgt:
+            # This constraint has already been added, so don't add it again.
+            return
+
+        # Save the metadata for the sum assumption.
+        self.tobj[-lit] = sobj
+        self.sum_indices[-lit] = (prefix, bound)
+        self.wght[-lit] = marginal_weight
+        self.swgt[-lit] = marginal_weight
+
+        # Add the assumption at the correct optimization level.
+        if self.done != -1 and self.wght[-lit] < self.blop[self.levl]:
+            # Defer activation to a lower level.
+            self.wstr[self.wght[-lit]].append(-lit)
+        else:
+            # Activate immediately.
+            self.sums.append(-lit)
 #
 #==============================================================================
 def parse_options():

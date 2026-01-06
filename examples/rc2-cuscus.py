@@ -861,35 +861,27 @@ class RC2(object):
 
             :type am1: list(int)
         """
+        # Mark the original constraints as garbage.
+        for l in am1:
+            self.garbage.add(l)
 
-        while len(am1) > 1:
-            # computing am1's weight
-            self.minw = min(map(lambda l: self.wght[l], am1))
+        prefixes, sorted_am1 = self.get_prefixes(am1)
 
-            # pretending am1 to be a core, and the bound is its size - 1
-            self.core_sels, b = am1, len(am1) - 1
+        for prefix_len, marginal_weight in prefixes:
+            # We know `prefix_len - 1` at-least-i clauses in this prefix are false.
+            self.cost += (prefix_len - 1) * marginal_weight
 
-            # incrementing the cost
-            self.cost += b * self.minw
+            # We add the remaining at-least-1 clause that may or may not be
+            # satisfiable, binding it to a new selector variable as usual.
 
-            # splitting and relaxing if needed
-            self.process_sels()
-
-            # updating the list of literals in am1 after splitting the weights
-            am1 = [l for l in am1 if l not in self.garbage]
-
-            # new selector
             selv = self.pool.id()
 
-            # adding a new clause
-            self.oracle.add_clause([-l for l in self.rels] + [-selv])
+            self.oracle.add_clause([l for l in sorted_am1[:prefix_len]] + [-selv])
 
-            # integrating the new selector
             self.sels.append(selv)
-            self.wght[selv] = self.minw
+            self.wght[selv] = marginal_weight
             self.smap[selv] = len(self.wght) - 1
 
-        # removing unnecessary assumptions
         self.filter_assumps()
 
     def trim_core(self):
@@ -1118,6 +1110,27 @@ class RC2(object):
         assert lit is not None
         return lit
 
+    def get_prefixes(self, lits):
+        """
+            Sort and compute the prefixes of an iterable of literals.
+
+            Returns (prefixes, sorted_lits), where prefixes is a list of tuples
+            (prefix_len, marginal_weight), such that sorted_lits[:prefix_len]
+            is a prefix of the literals with the given marginal weight.
+        """
+        assert len(lits) > 0
+
+        sorted_lits = sorted(lits, key=lambda l: self.wght[l], reverse=True)
+
+        prefixes = []
+        weights = [self.wght[l] for l in sorted_lits]
+        for i, weight in enumerate(weights[:-1]):
+            if weight != weights[i + 1]:
+                prefixes.append((i + 1, weight - weights[i + 1]))
+        prefixes.append((len(weights), weights[-1]))
+
+        return prefixes, sorted_lits
+
     def create_sum(self, bound=1):
         """
             Create a totalizer object encoding a cardinality
@@ -1141,17 +1154,12 @@ class RC2(object):
             raise Exception("create_sum not implemented for bound != 1")
 
         if not self.oracle.supports_atmost():  # standard totalizer-based encoding
-            # Compute the prefixes of the core.
-            self.rels.sort(key=lambda l: self.wght[-l], reverse=True)
-            prefixes = []
-            weights = [self.wght[-l] for l in self.rels]
-            for i, weight in enumerate(weights[:-1]):
-                if weight != weights[i + 1]:
-                    prefixes.append((i + 1, weight - weights[i + 1]))
-            prefixes.append((len(weights), self.minw))
+            core = [-l for l in self.rels]
+            prefixes, sorted_core = self.get_prefixes(core)
+            sorted_rels = [-l for l in sorted_core]
 
             # new totalizer sum
-            t = ISeqCounter(lits=self.rels, ubound=bound, top_id=self.pool.top)
+            t = ISeqCounter(lits=sorted_rels, ubound=bound, top_id=self.pool.top)
             
             # updating top variable id
             self.pool.top = t.top_id
@@ -1563,57 +1571,30 @@ class RC2Stratified(RC2, object):
             the base method :func:`RC2.process_am1` taking care of
             this.
         """
+        # Mark the original constraints as garbage.
+        for l in am1:
+            self.garbage.add(l)
 
-        # assumptions to remove
-        self.garbage = set()
+        prefixes, sorted_am1 = self.get_prefixes(am1)
 
-        # clauses to deactivate
-        to_deactivate = set([])
+        for prefix_len, marginal_weight in prefixes:
+            # We know `prefix_len - 1` at-least-i clauses in this prefix are false.
+            self.cost += (prefix_len - 1) * marginal_weight
 
-        while len(am1) > 1:
-            # computing am1's weight
-            self.minw = min(map(lambda l: self.wght[l], am1))
+            # We add the remaining at-least-1 clause that may or may not be
+            # satisfiable, binding it to a new selector variable as usual.
 
-            # pretending am1 to be a core, and the bound is its size - 1
-            self.core_sels, b = am1, len(am1) - 1
-
-            # incrementing the cost
-            self.cost += b * self.minw
-
-            # splitting and relaxing if needed
-            super(RC2Stratified, self).process_sels()
-
-            # updating the list of literals in am1 after splitting the weights
-            am1 = [l for l in am1 if l not in self.garbage]
-
-            # new selector
             selv = self.pool.id()
 
-            # adding a new clause
-            self.oracle.add_clause([-l for l in self.rels] + [-selv])
+            self.oracle.add_clause([l for l in sorted_am1[:prefix_len]] + [-selv])
 
-            # integrating the new selector
             self.sels.append(selv)
-            self.wght[selv] = self.minw
+            self.wght[selv] = marginal_weight
             self.smap[selv] = len(self.wght) - 1
 
-            # do not forget this newly selector!
+            # Remember the new constraint!
             self.bckp_set.add(selv)
 
-            if self.done != -1 and self.wght[selv] < self.blop[self.levl]:
-                self.wstr[self.wght[selv]].append(selv)
-                to_deactivate.add(selv)
-
-        # marking all remaining literals with small weights to be deactivated
-        for l in am1:
-            if self.done != -1 and self.wght[l] < self.blop[self.levl]:
-                self.wstr[self.wght[l]].append(l)
-                to_deactivate.add(l)
-
-        # deactivating unnecessary selectors
-        self.sels = [l for l in self.sels if l not in to_deactivate]
-
-        # removing unnecessary assumptions
         self.filter_assumps()
 
 #

@@ -1569,8 +1569,11 @@ class RC2Stratified(RC2, object):
             the detected intrinsic AtMost1 constraints should be
             remembered. The method is a slightly modified version of
             the base method :func:`RC2.process_am1` taking care of
-            this.
+            this. It also handles deactivating smaller-weight clauses.
         """
+        # Smaller-weight clauses to deactivate.
+        to_deactivate = set()
+
         # Mark the original constraints as garbage.
         for l in am1:
             self.garbage.add(l)
@@ -1594,6 +1597,15 @@ class RC2Stratified(RC2, object):
 
             # Remember the new constraint!
             self.bckp_set.add(selv)
+
+            # Move the constraint to the correct optimization level if it is
+            # too small for the current one.
+            if self.done != -1 and self.wght[selv] < self.blop[self.levl]:
+                self.wstr[self.wght[selv]].append(selv)
+                to_deactivate.add(selv)
+
+        # Deactivate smaller-weight selectors.
+        self.sels = [l for l in self.sels if l not in to_deactivate]
 
         self.filter_assumps()
 

@@ -181,8 +181,11 @@ class CardinalityMetadata:
 
 
 class Cuscus:
-    def __init__(self, formula: WCNF):
-        self._solver_name = "cadical195"
+    def __init__(self, formula: WCNF, should_minimize=False):
+        self.should_minimize = should_minimize
+
+        self.solver_name = "cadical195"
+        self.minimization_max_conflicts = 1000
 
         # The set of variables that appear in the original formula we were
         # given. Used to filter the model returned.
@@ -200,7 +203,7 @@ class Cuscus:
 
         self._id_pool = IDPool(start_from=formula.top_id + 1)
         self._oracle = Solver(
-                name=self._solver_name,
+                name=self.solver_name,
                 bootstrap_with=formula.hard_clauses
             )
 
@@ -255,9 +258,7 @@ class Cuscus:
                 # The core is empty, so the hard clauses are unsatisfiable.
                 return None
 
-            # TODO: Reduce the core.
-            # reduced_core = self._reduce_core(core)
-            reduced_core = core
+            reduced_core = self._reduce_core(core)
 
             # TODO: Handle unit cores separately.
             active_selectors, cost = self._relax_core(reduced_core, active_selectors, cost)
@@ -286,9 +287,46 @@ class Cuscus:
         return cost, original_model
     
     def _reduce_core(self, core: list[int]) -> list[int]:
-        # TODO: Implement and document.
-        # Should call either minimization or trimming or combination.
-        pass
+        # TODO: Document.
+        reduced_core = core
+
+        if self.should_minimize:
+            reduced_core = self._minimize_core(reduced_core)
+
+        return reduced_core
+
+    def _minimize_core(self, core: list[int]) -> list[int]:
+        # TODO: Better documentation.
+        """Attempt to minimize a core `core`."""
+        if len(core) < 2:
+            # The core is unit or empty, so minimization will not help.
+            return core
+
+        sorted_core = sorted(core, key=lambda s: self._selector_weights[s])
+
+        # Limit the number of conflicts allowed in the following
+        # `solve_limited()` calls.
+        self._oracle.conf_budget(self.minimization_max_conflicts)
+
+        for i in range(len(sorted_core)):
+            # Exclude a single selector from the original core.
+            possible_core = sorted_core[:i] + sorted_core[i + 1:]
+
+            match self._oracle.solve_limited(assumptions=possible_core):
+                case False:
+                    # `possible_core` is a (smaller) core.
+                    return possible_core
+                case True:
+                    # `possible_core` is not a core; keep trying.
+                    continue
+                case None:
+                    # We ran out of conflicts while checking; core minimization
+                    # is too expensive and we should stop.
+                    break
+
+        # If we did not find a smaller core, return the original one.
+        return core
+
 
     def _relax_core(self, core: list[int], active_selectors: set[int], cost: int) -> tuple[set[int], int]:
         # TODO: Document.
@@ -457,13 +495,14 @@ if __name__ == "__main__":
         )
     
     parser.add_argument("wcnf_file", type=Path)
+    parser.add_argument("-m", "--minimize", action="store_true")
 
     args = parser.parse_args()
 
     # Parse the input according to the MaxSAT Evaluation WCNF 2024 standard.
     formula = WCNF.from_path(args.wcnf_file)
 
-    solver = Cuscus(formula)
+    solver = Cuscus(formula, should_minimize=args.minimize)
     result = solver.solve()
 
     # Report the solution and exit according to the MaxSAT Evaluation 2024 standard.

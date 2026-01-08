@@ -4,6 +4,7 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 import sys
+import time
 from typing import Self
 
 from pysat._fileio import FileObject
@@ -181,9 +182,10 @@ class CardinalityMetadata:
 
 
 class Cuscus:
-    def __init__(self, formula: WCNF, should_minimize=False, should_harden_unit_cores=False):
+    def __init__(self, formula: WCNF, should_minimize=False, should_harden_unit_cores=False, verbosity=0):
         self.should_minimize = should_minimize
         self.should_harden_unit_cores = should_harden_unit_cores
+        self.verbosity = verbosity
 
         self.solver_name = "cadical195"
         self.minimization_max_conflicts = 1000
@@ -205,7 +207,8 @@ class Cuscus:
         self._id_pool = IDPool(start_from=formula.top_id + 1)
         self._oracle = Solver(
                 name=self.solver_name,
-                bootstrap_with=formula.hard_clauses
+                bootstrap_with=formula.hard_clauses,
+                use_timer=True
             )
 
         # Add the initial soft clauses to the problem formula.
@@ -252,7 +255,13 @@ class Cuscus:
 
         # TODO: Add stratification.
 
+        oracle_call_count = 1
+        total_processing_time = 0
+        total_core_size = 0
+
         while not self._oracle.solve(assumptions=list(active_selectors)):
+            start_time = time.perf_counter()
+
             core: list[int] = self._oracle.get_core()
 
             if not core:
@@ -268,12 +277,19 @@ class Cuscus:
 
             # TODO: Add core exhaustion.
 
-            # TODO: Tie debug output to a verbosity setting.
-            print(f"c {core=}")
-            print(f"c {cost=}")
-
             # Ensure we haven't accidentally activated a previously relaxed selector.
             assert active_selectors.isdisjoint(self._relaxed_selectors)
+
+            end_time = time.perf_counter()
+            processing_time = end_time - start_time
+
+            if self.verbosity >= 1:
+                print(f"c oracle calls: {oracle_call_count}; cost: {cost}; core size: {len(reduced_core)}; processing time: {processing_time}")
+            if self.verbosity >= 2:
+                print(f"c core: {reduced_core}")
+            oracle_call_count += 1
+            processing_time += processing_time
+            total_core_size += len(reduced_core)
 
         # We have relaxed the problem formula enough to make it satisfiable.
 
@@ -286,6 +302,12 @@ class Cuscus:
                 l for l in model
                 if abs(l) in self._original_vars
             ]
+
+        if self.verbosity >= 1:
+            print(f"c oracle time: {self._oracle.time_accum()}")
+            print(f"c total processing time: {total_processing_time}")
+            print(f"c oracle calls: {oracle_call_count}")
+            print(f"c mean core size: {total_core_size / float(oracle_call_count - 1)}")
 
         return cost, original_model
     
@@ -510,13 +532,14 @@ if __name__ == "__main__":
     parser.add_argument("wcnf_file", type=Path)
     parser.add_argument("-m", "--minimize", action="store_true")
     parser.add_argument("-u", "--harden-unit-cores", action="store_true")
+    parser.add_argument("-v", "--verbose", action="count", default=0)
 
     args = parser.parse_args()
 
     # Parse the input according to the MaxSAT Evaluation WCNF 2024 standard.
     formula = WCNF.from_path(args.wcnf_file)
 
-    solver = Cuscus(formula, should_minimize=args.minimize, should_harden_unit_cores=args.harden_unit_cores)
+    solver = Cuscus(formula, should_minimize=args.minimize, should_harden_unit_cores=args.harden_unit_cores, verbosity=args.verbose)
     result = solver.solve()
 
     # Report the solution and exit according to the MaxSAT Evaluation 2024 standard.

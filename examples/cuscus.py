@@ -1,32 +1,211 @@
 #!/usr/bin/env python3
 
 import argparse
+from dataclasses import dataclass
 from pathlib import Path
 import sys
+from typing import Self
 
-from pysat.formula import IDPool, WCNFPlus
+from pysat._fileio import FileObject
+from pysat.card import ISeqCounter
+from pysat.formula import IDPool
 from pysat.solvers import Solver
+
+# Use our own formula and parser because PySAT's builtin has some bugs.
+# TODO: Document.
+@dataclass
+class WCNF:
+    soft_clauses: list[tuple[list[int], int]]
+    hard_clauses: list[list[int]]
+    # The largest variable id used in the formula. Equivalent to the maximum
+    # absolute value of any literal. If the formula has no variables, we define
+    # `top_id` to be zero.
+    top_id: int
+
+    @classmethod
+    def from_path(cls, path):
+        # Read the file, using the extension to determine how to decompress.
+        with FileObject(name=path, mode="r", compression="use_ext") as file:
+            return cls.from_file(file.fp)
+
+    @classmethod
+    def from_file(cls, file):
+        soft_clauses = []
+        hard_clauses = []
+
+        variables = set()
+
+        for line_number, line in enumerate(file.readlines(), start=1):
+            stripped_line = line.strip()
+
+            # Ignore empty lines.
+            if not stripped_line:
+                continue
+
+            parts = stripped_line.split()
+
+            if parts[0] == "h":
+                # Hard clause.
+                clause = WCNF._parse_literals(line_number, stripped_line, parts)
+                variables |= {abs(l) for l in clause}
+                hard_clauses.append(clause)
+            elif WCNF._is_int(parts[0]):
+                # Soft clause.
+                weight = int(parts[0])
+                if weight <= 0:
+                    raise ValueError(
+                        f"Invalid clause on line {line_number}: '{stripped_line}'\n"
+                        f"Soft clauses must have positive weight, but {weight} is not positive."
+                    )
+                clause = WCNF._parse_literals(line_number, stripped_line, parts)
+                variables |= {abs(l) for l in clause}
+                soft_clauses.append((clause, weight))
+            elif parts[0][0] in "pc":
+                # Problem statement or comment line; ignore.
+                continue
+            else:
+                raise ValueError(
+                        f"Invalid line header on line {line_number}: '{stripped_line}'\n"
+                        f"Lines must start with 'p', 'c', 'h', or a numeric weight, not '{parts[0]}'."
+                    )
+       
+        if variables:
+            top_id = max(variables)
+        else:
+            top_id = 0
+
+        return cls(soft_clauses=soft_clauses, hard_clauses=hard_clauses, top_id=top_id)
+
+    @staticmethod
+    def _is_int(string: str) -> bool:
+        try:
+            int(string)
+        except ValueError:
+            return False
+        return True
+
+    @staticmethod
+    def _parse_literals(line_number: int, stripped_line: str, parts: list[str]) -> list[int]:
+        if parts[-1] != "0":
+            raise ValueError(
+                    f"Invalid clause on line {line_number}: '{stripped_line}'\n"
+                    f"Clauses must end with '0', not '{parts[-1]}'."
+                )
+
+        literals: list[int] = []
+        for index, literal_str in enumerate(parts[1:-1]):
+            try:
+                literal = int(literal_str)
+            except ValueError:
+                raise ValueError(
+                        f"Invalid clause on line {line_number}: '{stripped_line}'\n"
+                        f"Clauses literals must be integers, but '{literal_str}' (index {index}) is not an integer."
+                    )
+
+            if literal == 0:
+                raise ValueError(
+                        f"Invalid clause on line {line_number}: '{stripped_line}'\n"
+                        f"Clauses may not contain the variable 0 (found at index {index})."
+                    )
+
+            literals.append(literal)
+
+        if not literals:
+            raise ValueError(
+                    f"Invalid clause on line {line_number}: '{stripped_line}'\n"
+                    "Empty clauses are not allowed."
+                )
+
+        return literals
+
+
+@dataclass
+class CardinalityMetadata:
+    encoder: ISeqCounter
+    prefixes: list[tuple[int, int]]
+    prefix_index: int
+    upper_bound: int
+
+    def __post_init__(self):
+        if self.prefix_index not in range(len(self.prefixes)):
+            raise ValueError(f"`prefix_index` must index `prefixes`, but {self.prefix_index} is not in [0, {len(self.prefixes)})")
+        # A negative upper bound is impossible and not supported by
+        # `ISeqCounter`.
+        if self.upper_bound < 0:
+            raise ValueError(f"`upper_bound` must be non-negative, but {self.upper_bound} < 0")
+        # An upper bound equal to or exceeding the number of literals being
+        # bounded is trivial and not supported by `ISeqCounter`.
+        if self.upper_bound >= self.prefix_len:
+            raise ValueError(f"`upper_bound` must be less than `prefix_len`, but {self.upper_bound} >= {self.prefix_len}")
+
+    @property
+    def prefix(self):
+        return self.prefixes[self.prefix_index]
+
+    @property
+    def prefix_len(self):
+        return self.prefix[0]
+
+    @property
+    def weight(self):
+        return self.prefix[1]
+
+    @property
+    def consequents(self) -> list[Self]:
+        """The cardinality constraints most directly implied by this one."""
+        consequents: list[CardinalityMetadata] = []
+
+        # Add both of the consequents, skipping any that are invalid.
+
+        try:
+            consequents.append(CardinalityMetadata(
+                encoder=self.encoder,
+                prefixes=self.prefixes,
+                prefix_index=self.prefix_index,
+                upper_bound=self.upper_bound + 1
+            ))
+        except ValueError:
+            pass
+
+        try:
+            consequents.append(CardinalityMetadata(
+                encoder=self.encoder,
+                prefixes=self.prefixes,
+                prefix_index=self.prefix_index - 1,
+                upper_bound=self.upper_bound
+            ))
+        except ValueError:
+            pass
+
+        return consequents
 
 
 class Cuscus:
-    def __init__(self, formula: WCNFPlus):
+    def __init__(self, formula: WCNF):
         self._solver_name = "cadical195"
 
         # The set of variables that appear in the original formula we were
         # given. Used to filter the model returned.
-        self._original_vars: set[int] = set(range(1, formula.nv + 1))
+        self._original_vars: set[int] = set(range(1, formula.top_id + 1))
         # A mapping from selector literals to the weight of the clause each
         # one enables.
         self._selector_weights: dict[int, int] = {}
+        # The set of all selectors that have been relaxed (i.e. removed because
+        # they were part of a core). Used to prevent reactivating a selector
+        # that was previously removed, which would be a logic error.
+        self._relaxed_selectors: set[int] = set()
+        # A mapping from selector literals representing cardinality constraints
+        # to metadata for the constraint.
+        self._cardinality_metadata: dict[int, CardinalityMetadata] = {}
 
-        self._id_pool = IDPool(start_from=formula.nv + 1)
+        self._id_pool = IDPool(start_from=formula.top_id + 1)
         self._oracle = Solver(
                 name=self._solver_name,
-                bootstrap_with=formula.hard
+                bootstrap_with=formula.hard_clauses
             )
 
         # Add the initial soft clauses to the problem formula.
-        for clause, weight in zip(formula.soft, formula.wght):
+        for clause, weight in formula.soft_clauses:
             selector = self._add_soft_clause(clause, weight)
 
     def __del__(self):
@@ -39,7 +218,7 @@ class Cuscus:
 
         Returns the selector literal that activates the clause.
         """
-        assert weight >= 0
+        assert weight > 0 # TODO: Document that we dont except weights <= 0.
         # TODO: For unit clauses, perhaps reuse the literal as the selector.
         selector = self._id_pool.id()
         self._oracle.add_clause(clause + [-selector])
@@ -60,20 +239,14 @@ class Cuscus:
         """
 
         # The set of selectors whose clauses should be activated. We start by
-        # activating all selectors with positive weight; zero-weighted clauses
-        # can effectively be ignored as they incur no cost to falsify.
-        active_selectors: set[int] = set(
-                selector for (selector, weight) in self._selector_weights.items()
-                if weight > 0
-            )
+        # activating all selectors.
+        active_selectors: set[int] = set(self._selector_weights.keys())
         # The cost accrued so far due to forced clause falsifications.
         cost: int = 0
 
         # TODO: Detect intrinsic at-most-1 constraints.
 
         # TODO: Add stratification.
-
-        # TODO: Add core exhaustion.
 
         while not self._oracle.solve(assumptions=list(active_selectors)):
             core: list[int] = self._oracle.get_core()
@@ -82,11 +255,21 @@ class Cuscus:
                 # The core is empty, so the hard clauses are unsatisfiable.
                 return None
 
-            reduced_core: list[int] = self._reduce_core(core)
+            # TODO: Reduce the core.
+            # reduced_core = self._reduce_core(core)
+            reduced_core = core
 
+            # TODO: Handle unit cores separately.
             active_selectors, cost = self._relax_core(reduced_core, active_selectors, cost)
 
-            # TODO: Add some debug output tracking the progress.
+            # TODO: Add core exhaustion.
+
+            # TODO: Tie debug output to a verbosity setting.
+            print(f"c {core=}")
+            print(f"c {cost=}")
+
+            # Ensure we haven't accidentally activated a previously relaxed selector.
+            assert active_selectors.isdisjoint(self._relaxed_selectors)
 
         # We have relaxed the problem formula enough to make it satisfiable.
 
@@ -96,8 +279,8 @@ class Cuscus:
         # filter it to return a model containing only variables that appeared
         # in the original formula we were given.
         original_model: list[int] = [
-                literal for literal in model
-                if abs(literal) in self._original_vars
+                l for l in model
+                if abs(l) in self._original_vars
             ]
 
         return cost, original_model
@@ -107,9 +290,164 @@ class Cuscus:
         # Should call either minimization or trimming or combination.
         pass
 
-    def _relax_core(self, core: list[int], active_selectors: list[int], cost: int) -> tuple[list[int], int]:
-        # TODO: Implement and document.
-        pass
+    def _relax_core(self, core: list[int], active_selectors: set[int], cost: int) -> tuple[set[int], int]:
+        # TODO: Document.
+
+        # Relax the core literals.
+        core_set = set(core)
+        self._relaxed_selectors |= core_set
+        next_active_selectors = active_selectors - core_set
+
+        # Introduce any deferred cardinality constraints previously shadowed by
+        # the ones we just deactivated.
+        for selector in core:
+            if selector in self._cardinality_metadata:
+                next_active_selectors |= self._get_consequent_selectors(
+                        self._cardinality_metadata[selector]
+                    )
+
+        # Initialize a set of cardinality constraints on the variables of
+        # `core`. That is equivalent to the original selectors in `core` but
+        # can be incrementally relaxed. The initial `at_most_zero` constraint
+        # implies all the rest of the constraints, so we need not add them all
+        # immediately.
+        at_most_zero = self._initialize_cardinality_constraint(core)
+
+        # We already know the `at_most_zero` constraint is unsatisfiable,
+        # because it corresponds to the core we were given. Therefore, we can
+        # increment the cost and relax this constraint.
+        next_cost = cost + at_most_zero.weight
+        next_active_selectors |= self._get_consequent_selectors(at_most_zero)
+        
+        return next_active_selectors, next_cost
+
+    def _get_consequent_selectors(self, cardinality_metadata: CardinalityMetadata) -> set[int]:
+        """
+        Return the selectors for consequents of `cardinality_metadata`.
+
+        When a cardinality selector is deactivated, we must introduce any
+        cardinality constraints that are no longer made redundant. Each
+        cardinality constraint has at most two direct consequents, all of which
+        we return selectors for. This approach is greedy, adding some
+        cardinality constraints earlier than necessary. In particular, we may
+        try to add the same constraint twice, so we prevent this by filtering
+        against `self._relaxed_selectors`.
+
+        Returns selectors for the consequents of `cardinality_metadata`. These
+        should be activated in the next round of solving.
+        """
+        consequents = cardinality_metadata.consequents
+        selectors = [self._create_cardinality_selector(c) for c in consequents]
+        return {s for s in selectors if s not in self._relaxed_selectors}
+
+    def _create_cardinality_selector(self, cardinality_metadata: CardinalityMetadata) -> int:
+        """
+        Create a selector that enforces constraint denoted by `cardinality_metadata`.
+
+        Idempotently updates the underlying constraint encoding to ensure this
+        constraint exists, and then records the selector and its data.
+
+        Returns the created selector.
+        """
+        encoder = cardinality_metadata.encoder
+        prefix_len, marginal_weight = cardinality_metadata.prefix
+        upper_bound = cardinality_metadata.upper_bound
+
+        # Ensure that the maximum bound in the encoder is at least
+        # `upper_bound`, so the desired constraint is guaranteed to exist.
+        encoder.increase(ubound=upper_bound, top_id=self._id_pool.top)
+        self._id_pool.top = encoder.top_id
+        # Add only the new clauses generated by the encoder.
+        if encoder.nof_new > 0:
+            for clause in encoder.cnf.clauses[-encoder.nof_new:]:
+                self._add_hard_clause(clause)
+
+        # The negation of this literal will enforce the cardinality constraint.
+        constraint_literal = encoder.get_constraint(prefix_len, upper_bound)
+        assert constraint_literal is not None
+
+        selector = -constraint_literal
+        if selector not in self._selector_weights:
+            self._selector_weights[selector] = marginal_weight
+            self._cardinality_metadata[selector] = cardinality_metadata
+        else:
+            # These assertions would detect if we erroneously used the same
+            # selector literal for two different purposes. It is still up to
+            # the caller to ensure that we don't add activate this selector on
+            # more than one occasion.
+            assert self._selector_weights[selector] == marginal_weight
+            assert self._cardinality_metadata[selector] == cardinality_metadata
+
+        return selector
+
+    def _initialize_cardinality_constraint(self, core: list[int]) -> CardinalityMetadata:
+        """
+        Initialize a cardinality constraint relaxing the core `core`.
+
+        Initializes a cardinality constraint encoding requiring that the
+        number of selectors in `core` that are falsified is bounded above by
+        some number. The upper bound can be changed, incrementally growing the
+        encoding if it is increased. This method does not enforce any
+        particular cardinality constraint, but rather performs the setup needed
+        to do so. Particular cardinality constraints are introduced using
+        `self._add_cardinality_constraint()`.
+
+        Returns metadata representing a cardinality constraint that at most
+        zero of all the selectors in `core` are falsified (but does not impose
+        this constraint).
+        """
+        prefixes, sorted_core = self._get_prefixes(core)
+
+        # We impose a bound on the number of selectors in `core` that can be
+        # falsified. We ensure the order of variables in `sorted_core` and
+        # `relaxation_literals` are the same, so that the computed `prefixes`
+        # map correctly onto both.
+        relaxation_literals = [-l for l in sorted_core]
+    
+        # Initialize the encoding.
+        encoder = ISeqCounter(lits=relaxation_literals, ubound=0, top_id=self._id_pool.top)
+        self._id_pool.top = encoder.top_id
+        for clause in encoder.cnf.clauses:
+            self._add_hard_clause(clause)
+
+        return CardinalityMetadata(
+                encoder=encoder,
+                prefixes=prefixes,
+                # Use the last prefix, which is always the entire core.
+                prefix_index=len(prefixes) - 1,
+                upper_bound=0
+            )
+
+    def _get_prefixes(self, selectors: list[int]) -> tuple[list[tuple[int, int]], list[int]]: 
+        """
+        Compute the prefixes of a list of selectors.
+
+        Note that a literal is only considered a "selector" if it is tracked in
+        `self._selector_weights`. This method does not work for arbitrary
+        literals.
+
+        Returns a pair `(prefixes, sorted_selectors)`, where `prefixes` is a
+        list of tuples of the form `(prefix_len, marginal_weight)`, each
+        denoting that the first `prefix_len` selectors of `sorted_selectors`
+        (i.e. `sorted_selectors[:prefix_len]`) form a prefix with marginal
+        weight `marginal_weight`.
+        """
+        if not selectors:
+            # `selectors` is empty, so there are no prefixes.
+            return [], []
+
+        # Sort the selectors in order of decreasing weight.
+        sorted_selectors = sorted(selectors, key=lambda s: self._selector_weights[s], reverse=True)
+        weights = [self._selector_weights[s] for s in sorted_selectors]
+   
+        prefixes: list[tuple[int, int]] = []
+        for i, weight in enumerate(weights[:-1]):
+            if weight != weights[i + 1]:
+                prefixes.append((i + 1, weight - weights[i + 1]))
+        prefixes.append((len(weights), weights[-1]))
+
+        return prefixes, sorted_selectors
+
 
 
 if __name__ == "__main__":
@@ -122,10 +460,8 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # TODO: Use our own WCNF parser.
     # Parse the input according to the MaxSAT Evaluation WCNF 2024 standard.
-    formula = WCNFPlus(from_file=args.wcnf_file)
-    assert len(formula.atms) == 0
+    formula = WCNF.from_path(args.wcnf_file)
 
     solver = Cuscus(formula)
     result = solver.solve()

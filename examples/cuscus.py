@@ -181,9 +181,9 @@ class CardinalityMetadata:
 
 
 class Cuscus:
-    def __init__(self, formula: WCNF, should_minimize=False):
+    def __init__(self, formula: WCNF, should_minimize=False, should_harden_unit_cores=False):
         self.should_minimize = should_minimize
-        self.should_harden_unit_cores = True
+        self.should_harden_unit_cores = should_harden_unit_cores
 
         self.solver_name = "cadical195"
         self.minimization_max_conflicts = 1000
@@ -509,13 +509,14 @@ if __name__ == "__main__":
     
     parser.add_argument("wcnf_file", type=Path)
     parser.add_argument("-m", "--minimize", action="store_true")
+    parser.add_argument("-u", "--harden-unit-cores", action="store_true")
 
     args = parser.parse_args()
 
     # Parse the input according to the MaxSAT Evaluation WCNF 2024 standard.
     formula = WCNF.from_path(args.wcnf_file)
 
-    solver = Cuscus(formula, should_minimize=args.minimize)
+    solver = Cuscus(formula, should_minimize=args.minimize, should_harden_unit_cores=args.harden_unit_cores)
     result = solver.solve()
 
     # Report the solution and exit according to the MaxSAT Evaluation 2024 standard.

@@ -136,6 +136,7 @@ import getopt
 import itertools
 from math import copysign
 import os
+from pysat._fileio import FileObject
 from pysat.formula import CNFPlus, WCNFPlus, IDPool
 from pysat.card import ISeqCounter
 from pysat.process import Processor
@@ -144,6 +145,7 @@ import re
 import six
 from six.moves import range
 import sys
+from dataclasses import dataclass
 
 
 # names of BLO strategies
@@ -1758,16 +1760,124 @@ def usage():
 
 #
 #==============================================================================
+@dataclass
+class WCNF:
+    soft_clauses: list[tuple[list[int], int]]
+    hard_clauses: list[list[int]]
+    # The largest variable id used in the formula. Equivalent to the maximum
+    # absolute value of any literal. If the formula has no variables, we define
+    # `top_id` to be zero.
+    top_id: int
+
+    @classmethod
+    def from_path(cls, path):
+        # Read the file, using the extension to determine how to decompress.
+        with FileObject(name=path, mode="r", compression="use_ext") as file:
+            return cls.from_file(file.fp)
+
+    @classmethod
+    def from_file(cls, file):
+        soft_clauses = []
+        hard_clauses = []
+
+        variables = set()
+
+        for line_number, line in enumerate(file.readlines(), start=1):
+            stripped_line = line.strip()
+
+            # Ignore empty lines.
+            if not stripped_line:
+                continue
+
+            parts = stripped_line.split()
+
+            if parts[0] == "h":
+                # Hard clause.
+                clause = WCNF._parse_literals(line_number, stripped_line, parts)
+                variables |= {abs(l) for l in clause}
+                hard_clauses.append(clause)
+            elif WCNF._is_int(parts[0]):
+                # Soft clause.
+                weight = int(parts[0])
+                if weight <= 0:
+                    raise ValueError(
+                        f"Invalid clause on line {line_number}: '{stripped_line}'\n"
+                        f"Soft clauses must have positive weight, but {weight} is not positive."
+                    )
+                clause = WCNF._parse_literals(line_number, stripped_line, parts)
+                variables |= {abs(l) for l in clause}
+                soft_clauses.append((clause, weight))
+            elif parts[0][0] in "pc":
+                # Problem statement or comment line; ignore.
+                continue
+            else:
+                raise ValueError(
+                        f"Invalid line header on line {line_number}: '{stripped_line}'\n"
+                        f"Lines must start with 'p', 'c', 'h', or a numeric weight, not '{parts[0]}'."
+                    )
+       
+        if variables:
+            top_id = max(variables)
+        else:
+            top_id = 0
+
+        return cls(soft_clauses=soft_clauses, hard_clauses=hard_clauses, top_id=top_id)
+    
+    @staticmethod
+    def _is_int(string: str) -> bool:
+        try:
+            int(string)
+        except ValueError:
+            return False
+        return True
+
+    @staticmethod
+    def _parse_literals(line_number: int, stripped_line: str, parts: list[str]) -> list[int]:
+        if parts[-1] != "0":
+            raise ValueError(
+                    f"Invalid clause on line {line_number}: '{stripped_line}'\n"
+                    f"Clauses must end with '0', not '{parts[-1]}'."
+                )
+
+        literals: list[int] = []
+        for index, literal_str in enumerate(parts[1:-1]):
+            try:
+                literal = int(literal_str)
+            except ValueError:
+                raise ValueError(
+                        f"Invalid clause on line {line_number}: '{stripped_line}'\n"
+                        f"Clauses literals must be integers, but '{literal_str}' (index {index}) is not an integer."
+                    )
+
+            if literal == 0:
+                raise ValueError(
+                        f"Invalid clause on line {line_number}: '{stripped_line}'\n"
+                        f"Clauses may not contain the variable 0 (found at index {index})."
+                    )
+
+            literals.append(literal)
+
+        if not literals:
+            raise ValueError(
+                    f"Invalid clause on line {line_number}: '{stripped_line}'\n"
+                    "Empty clauses are not allowed."
+                )
+
+        return literals
+
+#
+#==============================================================================
 if __name__ == '__main__':
     adapt, blo, block, cmode, to_enum, exhaust, incr, minz, process, solver, \
             trim, verbose, vnew, files = parse_options()
 
     if files:
-        # parsing the input formula
-        if re.search(r'\.wcnf[p|+]?(\.(gz|bz2|lzma|xz|zst))?$', files[0]):
-            formula = WCNFPlus(from_file=files[0])
-        else:  # expecting '*.cnf[,p,+].*'
-            formula = CNFPlus(from_file=files[0]).weighted()
+        wcnf = WCNF.from_path(files[0])
+        formula = WCNFPlus()
+        for c in wcnf.hard_clauses:
+            formula.append(c)
+        for c, w in wcnf.soft_clauses:
+            formula.append(c, weight=w)
 
         # enabling the competition mode
         if cmode:

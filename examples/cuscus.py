@@ -183,6 +183,7 @@ class CardinalityMetadata:
 class Cuscus:
     def __init__(self, formula: WCNF, should_minimize=False):
         self.should_minimize = should_minimize
+        self.should_harden_unit_cores = True
 
         self.solver_name = "cadical195"
         self.minimization_max_conflicts = 1000
@@ -260,8 +261,10 @@ class Cuscus:
 
             reduced_core = self._reduce_core(core)
 
-            # TODO: Handle unit cores separately.
             active_selectors, cost = self._relax_core(reduced_core, active_selectors, cost)
+
+            if len(core) == 1 and self.should_harden_unit_cores:
+                self._add_hard_clause([-core[0]])
 
             # TODO: Add core exhaustion.
 
@@ -330,11 +333,14 @@ class Cuscus:
 
     def _relax_core(self, core: list[int], active_selectors: set[int], cost: int) -> tuple[set[int], int]:
         # TODO: Document.
+        # Needed for the reasoning behind removing the at-most-zero constraint.
+        assert len(core) >= 1
 
         # Relax the core literals.
         core_set = set(core)
         self._relaxed_selectors |= core_set
         next_active_selectors = active_selectors - core_set
+        next_cost = cost
 
         # Introduce any deferred cardinality constraints previously shadowed by
         # the ones we just deactivated.
@@ -344,6 +350,12 @@ class Cuscus:
                         self._cardinality_metadata[selector]
                     )
 
+        # If the core is unit, we short-circuit here since the constraints
+        # below would be trivial.
+        if len(core) == 1:
+            next_cost += self._selector_weights[core[0]]
+            return next_active_selectors, next_cost
+
         # Initialize a set of cardinality constraints on the variables of
         # `core`. That is equivalent to the original selectors in `core` but
         # can be incrementally relaxed. The initial `at_most_zero` constraint
@@ -352,9 +364,10 @@ class Cuscus:
         at_most_zero = self._initialize_cardinality_constraint(core)
 
         # We already know the `at_most_zero` constraint is unsatisfiable,
-        # because it corresponds to the core we were given. Therefore, we can
-        # increment the cost and relax this constraint.
-        next_cost = cost + at_most_zero.weight
+        # because the core `core` tells us at least one of the selectors must
+        # be falsified, so we can just increment the cost and relax this
+        # constraint.
+        next_cost += at_most_zero.weight
         next_active_selectors |= self._get_consequent_selectors(at_most_zero)
         
         return next_active_selectors, next_cost

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from __future__ import annotations
+
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,10 +33,10 @@ class WCNF:
 
     @classmethod
     def from_file(cls, file):
-        soft_clauses = []
-        hard_clauses = []
+        soft_clauses: list[tuple[list[int], int]] = []
+        hard_clauses: list[list[int]] = []
 
-        variables = set()
+        variables: set[int] = set()
 
         for line_number, line in enumerate(file.readlines(), start=1):
             stripped_line = line.strip()
@@ -43,7 +45,7 @@ class WCNF:
             if not stripped_line:
                 continue
 
-            parts = stripped_line.split()
+            parts: list[str] = stripped_line.split()
 
             if parts[0] == "h":
                 # Hard clause.
@@ -140,19 +142,19 @@ class CardinalityMetadata:
             raise ValueError(f"`upper_bound` must be less than `prefix_len`, but {self.upper_bound} >= {self.prefix_len}")
 
     @property
-    def prefix(self):
+    def prefix(self) -> tuple[int, int]:
         return self.prefixes[self.prefix_index]
 
     @property
-    def prefix_len(self):
+    def prefix_len(self) -> int:
         return self.prefix[0]
 
     @property
-    def weight(self):
+    def weight(self) -> int:
         return self.prefix[1]
 
     @property
-    def consequents(self) -> list[Self]:
+    def consequents(self) -> list[CardinalityMetadata]:
         """The cardinality constraints most directly implied by this one."""
         consequents: list[CardinalityMetadata] = []
 
@@ -249,7 +251,7 @@ class Cuscus:
         # activating all selectors.
         active_selectors: list[int] = list(self._selector_weights.keys())
         # The cost accrued so far due to forced clause falsifications.
-        cost: int = 0
+        cost = 0
 
         # TODO: Detect intrinsic at-most-1 constraints.
 
@@ -268,7 +270,7 @@ class Cuscus:
                 # The core is empty, so the hard clauses are unsatisfiable.
                 return None
 
-            reduced_core = self._reduce_core(core)
+            reduced_core: list[int] = self._reduce_core(core)
 
             active_selectors, cost = self._relax_core(reduced_core, active_selectors, cost)
 
@@ -327,7 +329,7 @@ class Cuscus:
             # The core is unit or empty, so minimization will not help.
             return core
 
-        sorted_core = sorted(core, key=lambda s: self._selector_weights[s])
+        sorted_core: list[int] = sorted(core, key=lambda s: self._selector_weights[s])
 
         # Limit the number of conflicts allowed in the following
         # `solve_limited()` calls.
@@ -335,7 +337,7 @@ class Cuscus:
 
         for i in range(len(sorted_core)):
             # Exclude a single selector from the original core.
-            possible_core = sorted_core[:i] + sorted_core[i + 1:]
+            possible_core: list[int] = sorted_core[:i] + sorted_core[i + 1:]
 
             match self._oracle.solve_limited(assumptions=possible_core):
                 case False:
@@ -359,7 +361,7 @@ class Cuscus:
         assert len(core) >= 1
 
         # Relax the core literals.
-        core_set = set(core)
+        core_set: set[int] = set(core)
         self._relaxed_selectors |= core_set
         next_active_selectors: list[int] = [s for s in active_selectors if s not in core_set]
         next_cost = cost
@@ -394,7 +396,7 @@ class Cuscus:
         
         return next_active_selectors, next_cost
 
-    def _get_consequent_selectors(self, cardinality_metadata: CardinalityMetadata) -> set[int]:
+    def _get_consequent_selectors(self, cardinality_metadata: CardinalityMetadata) -> list[int]:
         """
         Return the selectors for consequents of `cardinality_metadata`.
 
@@ -409,9 +411,9 @@ class Cuscus:
         Returns selectors for the consequents of `cardinality_metadata`. These
         should be activated in the next round of solving.
         """
-        consequents = cardinality_metadata.consequents
-        selectors = [self._create_cardinality_selector(c) for c in consequents]
-        return {s for s in selectors if s not in self._relaxed_selectors}
+        consequents: list[CardinalityMetadata] = cardinality_metadata.consequents
+        selectors: list[int] = [self._create_cardinality_selector(c) for c in consequents]
+        return [s for s in selectors if s not in self._relaxed_selectors]
 
     def _create_cardinality_selector(self, cardinality_metadata: CardinalityMetadata) -> int:
         """
@@ -475,7 +477,7 @@ class Cuscus:
         # falsified. We ensure the order of variables in `sorted_core` and
         # `relaxation_literals` are the same, so that the computed `prefixes`
         # map correctly onto both.
-        relaxation_literals = [-l for l in sorted_core]
+        relaxation_literals: list[int] = [-l for l in sorted_core]
     
         # Initialize the encoding.
         encoder = ISeqCounter(lits=relaxation_literals, ubound=0, top_id=self._id_pool.top)
@@ -510,8 +512,8 @@ class Cuscus:
             return [], []
 
         # Sort the selectors in order of decreasing weight.
-        sorted_selectors = sorted(selectors, key=lambda s: self._selector_weights[s], reverse=True)
-        weights = [self._selector_weights[s] for s in sorted_selectors]
+        sorted_selectors: list[int] = sorted(selectors, key=lambda s: self._selector_weights[s], reverse=True)
+        weights: list[int] = [self._selector_weights[s] for s in sorted_selectors]
    
         prefixes: list[tuple[int, int]] = []
         for i, weight in enumerate(weights[:-1]):
@@ -520,7 +522,6 @@ class Cuscus:
         prefixes.append((len(weights), weights[-1]))
 
         return prefixes, sorted_selectors
-
 
 
 if __name__ == "__main__":

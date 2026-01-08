@@ -247,7 +247,7 @@ class Cuscus:
 
         # The set of selectors whose clauses should be activated. We start by
         # activating all selectors.
-        active_selectors: set[int] = set(self._selector_weights.keys())
+        active_selectors: list[int] = list(self._selector_weights.keys())
         # The cost accrued so far due to forced clause falsifications.
         cost: int = 0
 
@@ -259,7 +259,7 @@ class Cuscus:
         total_processing_time = 0
         total_core_size = 0
 
-        while not self._oracle.solve(assumptions=list(active_selectors)):
+        while not self._oracle.solve(assumptions=active_selectors):
             start_time = time.perf_counter()
 
             core: list[int] = self._oracle.get_core()
@@ -278,7 +278,7 @@ class Cuscus:
             # TODO: Add core exhaustion.
 
             # Ensure we haven't accidentally activated a previously relaxed selector.
-            assert active_selectors.isdisjoint(self._relaxed_selectors)
+            assert set(active_selectors).isdisjoint(self._relaxed_selectors)
 
             end_time = time.perf_counter()
             processing_time = end_time - start_time
@@ -353,7 +353,7 @@ class Cuscus:
         return core
 
 
-    def _relax_core(self, core: list[int], active_selectors: set[int], cost: int) -> tuple[set[int], int]:
+    def _relax_core(self, core: list[int], active_selectors: list[int], cost: int) -> tuple[list[int], int]:
         # TODO: Document.
         # Needed for the reasoning behind removing the at-most-zero constraint.
         assert len(core) >= 1
@@ -361,14 +361,14 @@ class Cuscus:
         # Relax the core literals.
         core_set = set(core)
         self._relaxed_selectors |= core_set
-        next_active_selectors = active_selectors - core_set
+        next_active_selectors: list[int] = [s for s in active_selectors if s not in core_set]
         next_cost = cost
 
         # Introduce any deferred cardinality constraints previously shadowed by
         # the ones we just deactivated.
         for selector in core:
             if selector in self._cardinality_metadata:
-                next_active_selectors |= self._get_consequent_selectors(
+                next_active_selectors += self._get_consequent_selectors(
                         self._cardinality_metadata[selector]
                     )
 
@@ -390,7 +390,7 @@ class Cuscus:
         # be falsified, so we can just increment the cost and relax this
         # constraint.
         next_cost += at_most_zero.weight
-        next_active_selectors |= self._get_consequent_selectors(at_most_zero)
+        next_active_selectors += self._get_consequent_selectors(at_most_zero)
         
         return next_active_selectors, next_cost
 

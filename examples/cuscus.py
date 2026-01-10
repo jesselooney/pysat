@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 import sys
 import time
-from typing import Self
 
 from pysat._fileio import FileObject
 from pysat.card import ISeqCounter
@@ -52,7 +51,7 @@ class WCNF:
             if parts[0] == "h":
                 # Hard clause.
                 clause = WCNF._parse_literals(line_number, stripped_line, parts)
-                variables |= {abs(l) for l in clause}
+                variables |= {abs(lit) for lit in clause}
                 hard_clauses.append(clause)
             elif WCNF._is_int(parts[0]):
                 # Soft clause.
@@ -63,7 +62,7 @@ class WCNF:
                         f"Soft clauses must have positive weight, but {weight} is not positive."
                     )
                 clause = WCNF._parse_literals(line_number, stripped_line, parts)
-                variables |= {abs(l) for l in clause}
+                variables |= {abs(lit) for lit in clause}
                 soft_clauses.append((clause, weight))
             elif parts[0][0] in "pc":
                 # Problem statement or comment line; ignore.
@@ -243,7 +242,7 @@ class Cuscus:
 
         # Add the initial soft clauses to the problem formula.
         for clause, weight in formula.soft_clauses:
-            selector = self._add_soft_clause(clause, weight)
+            self._add_soft_clause(clause, weight)
 
     def __del__(self):
         # TODO: Perform any necessary cleanup.
@@ -385,7 +384,7 @@ class Cuscus:
         # `model` contains extraneous variables added during solving, so we
         # filter it to return a model containing only variables that appeared
         # in the original formula we were given.
-        original_model: list[int] = [l for l in model if abs(l) in self._original_vars]
+        original_model: list[int] = [lit for lit in model if abs(lit) in self._original_vars]
 
         if self.verbosity >= 1:
             print(f"c oracle time: {self._oracle.time_accum()}")
@@ -570,7 +569,7 @@ class Cuscus:
         # falsified. We ensure the order of variables in `sorted_core` and
         # `relaxation_literals` are the same, so that the computed `prefixes`
         # map correctly onto both.
-        relaxation_literals: list[int] = [-l for l in sorted_core]
+        relaxation_literals: list[int] = [-lit for lit in sorted_core]
 
         # Initialize the encoding.
         encoder = ISeqCounter(
@@ -628,7 +627,7 @@ def bitstr_from_model(model: list[int]) -> str:
     if not model:
         return ""
 
-    var_count = max(abs(l) for l in model)
+    var_count = max(abs(lit) for lit in model)
     bitstr = ["0"] * var_count
     for literal in model:
         if literal > 0:

@@ -280,10 +280,15 @@ class Cuscus:
             return None
 
         # We test each selector individually to see if it is contradicted.
+        contradicted_selectors: list[int] = []
         cost = 0
         for selector in active_selectors:
             if not self._oracle.solve(assumptions=model + [selector]):
+                contradicted_selectors.append(selector)
                 cost += self._selector_weights[selector]
+
+        if self.verbosity >= 2:
+            print(f"c watched model contradicted selectors: {contradicted_selectors}")
 
         return cost
 
@@ -341,42 +346,42 @@ class Cuscus:
             start_time = time.perf_counter()
 
             core: list[int] = self._oracle.get_core()
+            core_count += 1
 
             if not core:
                 # The core is empty, so the hard clauses are unsatisfiable.
                 return None
 
             reduced_core: list[int] = self._reduce_core(core)
+            total_core_size += len(reduced_core)
 
             active_selectors, cost = self._relax_core(
                 reduced_core, active_selectors, cost
             )
-
-            # Verify any watched models against the new selectors and cost.
-            if self.watched_models:
-                self._verify_watched_models(active_selectors, cost)
 
             if len(core) == 1 and self.should_harden_unit_cores:
                 self._add_hard_clause([-core[0]])
 
             # TODO: Add core exhaustion.
 
-            # Ensure we haven't accidentally activated a previously relaxed selector.
-            assert set(active_selectors).isdisjoint(self._relaxed_selectors)
-
             end_time = time.perf_counter()
             processing_time = end_time - start_time
-
-            core_count += 1
+            processing_time += processing_time
 
             if self.verbosity >= 1:
                 print(
                     f"c cores found: {core_count}; cost: {cost}; core size: {len(reduced_core)}; processing time: {processing_time}"
                 )
             if self.verbosity >= 2:
-                print(f"c core: {reduced_core}")
-            processing_time += processing_time
-            total_core_size += len(reduced_core)
+                print(f"c reduced core: {reduced_core}")
+                print(f"c active_selectors: {active_selectors}")
+
+            # Verify any watched models against the new selectors and cost.
+            if self.watched_models:
+                self._verify_watched_models(active_selectors, cost)
+
+            # Ensure we haven't accidentally activated a previously relaxed selector.
+            assert set(active_selectors).isdisjoint(self._relaxed_selectors)
 
         # We have relaxed the problem formula enough to make it satisfiable.
 
@@ -385,7 +390,9 @@ class Cuscus:
         # `model` contains extraneous variables added during solving, so we
         # filter it to return a model containing only variables that appeared
         # in the original formula we were given.
-        original_model: list[int] = [lit for lit in model if abs(lit) in self._original_vars]
+        original_model: list[int] = [
+            lit for lit in model if abs(lit) in self._original_vars
+        ]
 
         if self.verbosity >= 1:
             print(f"c oracle time: {self._oracle.time_accum()}")

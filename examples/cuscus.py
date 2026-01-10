@@ -333,7 +333,7 @@ class Cuscus:
 
         # TODO: Add stratification.
 
-        oracle_call_count = 1
+        core_count = 0
         total_processing_time = 0
         total_core_size = 0
 
@@ -367,13 +367,14 @@ class Cuscus:
             end_time = time.perf_counter()
             processing_time = end_time - start_time
 
+            core_count += 1
+
             if self.verbosity >= 1:
                 print(
-                    f"c oracle calls: {oracle_call_count}; cost: {cost}; core size: {len(reduced_core)}; processing time: {processing_time}"
+                    f"c cores found: {core_count}; cost: {cost}; core size: {len(reduced_core)}; processing time: {processing_time}"
                 )
             if self.verbosity >= 2:
                 print(f"c core: {reduced_core}")
-            oracle_call_count += 1
             processing_time += processing_time
             total_core_size += len(reduced_core)
 
@@ -389,8 +390,8 @@ class Cuscus:
         if self.verbosity >= 1:
             print(f"c oracle time: {self._oracle.time_accum()}")
             print(f"c total processing time: {total_processing_time}")
-            print(f"c oracle calls: {oracle_call_count}")
-            print(f"c mean core size: {total_core_size / float(oracle_call_count - 1)}")
+            print(f"c cores found: {core_count}")
+            print(f"c mean core size: {total_core_size / float(core_count)}")
 
         return cost, original_model
 

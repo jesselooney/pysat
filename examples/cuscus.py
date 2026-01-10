@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 from dataclasses import dataclass
 from pathlib import Path
 import sys
@@ -184,10 +185,26 @@ class CardinalityMetadata:
 
 
 class Cuscus:
-    def __init__(self, formula: WCNF, should_minimize=False, should_harden_unit_cores=False, verbosity=0):
-        self.should_minimize = should_minimize
+    def __init__(
+            self,
+            formula: WCNF,
+            *,
+            should_harden_unit_cores: bool = False,
+            should_minimize: bool = False,
+            verbosity: int = 0,
+            watched_models: list[tuple[list[int], int | None]] = [],
+        ):
         self.should_harden_unit_cores = should_harden_unit_cores
+        self.should_minimize = should_minimize
         self.verbosity = verbosity
+        # A list of models and their expected costs to watch as the solver
+        # runs. If a watched model's calculated cost ever differs from its
+        # given expected cost, an error is thrown. If the expected cost is set
+        # to `None`, its initial cost (calculated before the formula is ever
+        # transformed) will be used as the expected cost. This setting is
+        # intended to be used for debugging.
+        # TODO: Give an example input and its interpretation.
+        self.watched_models: list[tuple[list[int], int | None]] = watched_models
 
         self.solver_name = "cadical195"
         self.minimization_max_conflicts = 1000
@@ -238,6 +255,49 @@ class Cuscus:
         """Add a hard clause to the problem formula."""
         self._oracle.add_clause(clause)
 
+    def _get_cost(self, model: list[int], active_selectors: list[int]) -> int | None:
+        """
+        Compute the cost of a model given some active selectors.
+
+        `model` must be a list of literals representing a partial (or total)
+        assignment to the variables of the problem formula. 
+
+        Returns the total weight of all selectors in `active_selectors`
+        contradicted by the model, or `None` if the model does not satisfy the
+        current hard clauses of the formula.
+        """
+        if not self._oracle.solve(assumptions=model):
+            return None
+
+        # We test each selector individually to see if it is contradicted.
+        cost = 0
+        for selector in active_selectors:
+            if not self._oracle.solve(assumptions=model + [selector]):
+                cost += self._selector_weights[selector]
+
+        return cost
+
+    def _verify_watched_models(self, active_selectors: list[int], accrued_cost: int):
+        for model_index, (model, expected_cost) in enumerate(self.watched_models):
+            model_cost = self._get_cost(model, active_selectors)
+
+            if model_cost is None:
+                raise Exception(f"watched model {model_index} contradicts the hard clauses")
+
+            computed_cost = model_cost + accrued_cost
+
+            # Initialize the expected cost if one was not given.
+            if expected_cost is None:
+                expected_cost = computed_cost
+                self.watched_models[model_index] = (model, expected_cost)
+            
+            if computed_cost != expected_cost:
+                raise Exception(
+                        f"watched model {model_index} has unexpected cost\n"
+                        f"\texpected cost: {expected_cost}\n"
+                        f"\tcomputed cost: {computed_cost}"
+                    )
+
     def solve(self) -> tuple[int, list[int]] | None:
         """
         Find the minimum cost to satisfy the problem formula.
@@ -252,6 +312,10 @@ class Cuscus:
         active_selectors: list[int] = list(self._selector_weights.keys())
         # The cost accrued so far due to forced clause falsifications.
         cost = 0
+
+        # Verify any watched models against the initial selectors and cost.
+        if self.watched_models:
+            self._verify_watched_models(active_selectors, cost)
 
         # TODO: Detect intrinsic at-most-1 constraints.
 
@@ -273,6 +337,10 @@ class Cuscus:
             reduced_core: list[int] = self._reduce_core(core)
 
             active_selectors, cost = self._relax_core(reduced_core, active_selectors, cost)
+
+            # Verify any watched models against the new selectors and cost.
+            if self.watched_models:
+                self._verify_watched_models(active_selectors, cost)
 
             if len(core) == 1 and self.should_harden_unit_cores:
                 self._add_hard_clause([-core[0]])
@@ -524,23 +592,97 @@ class Cuscus:
         return prefixes, sorted_selectors
 
 
+def bitstr_from_model(model: list[int]) -> str:
+    # TODO: Document.
+    if not model:
+        return ""
+
+    var_count = max(abs(l) for l in model)
+    bitstr = ["0"] * var_count
+    for literal in model:
+        if literal > 0:
+            index = abs(literal) - 1
+            bitstr[index] = "1"
+
+    return "".join(bitstr)
+        
+
+def model_from_bitstr(bitstr: str) -> list[int]:
+    # TODO: Document.
+    model = []
+    for index, char in enumerate(bitstr):
+        var = index + 1
+        if char == "0":
+            model.append(-var)
+        elif char == "1":
+            model.append(var)
+        else:
+            raise Exception(f"invalid model bitstring: the bitstring must contain only 0s and 1s but '{char}' was found at index {index}")
+
+    return model
+
+
+def parse_watched_models(var_count: int) -> list[tuple[list[int], int | None]]:
+    # TODO: Document.
+    with args.watched_models_csv.open(mode="r", newline="") as csv_file:
+        reader = csv.DictReader(csv_file)
+
+        watched_models = []
+        for row_index, row in enumerate(reader):
+            # TODO: Handle the possible exception raised by `model_from_bitstr`.
+            if row["model"] is None:
+                raise Exception(f"invalid data row at index {row_index}: missing value for column 'model'")
+            model = model_from_bitstr(row["model"].strip())
+            if len(model) != var_count:
+                raise Exception(f"invalid data row at index {row_index}: expected {var_count} variables, but model bitstring gives {len(model)}")
+
+            if row["cost"] is None:
+                raise Exception(f"invalid data row at index {row_index}: missing value for column 'cost'")
+            cost_str = row["cost"].strip()
+            if cost_str:
+                try:
+                    cost = int(cost_str)
+                except ValueError:
+                    raise Exception(f"invalid data row at index {row_index}: cost must be an integer, but '{cost_str}' is not")
+            else:
+                cost = None
+
+            watched_models.append((model, cost))
+
+    return watched_models
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
             prog="cuscus",
             description="An RC2-like MaxSAT solver without cloning."
         )
     
+    # TODO: Document the arguments with help text.
     parser.add_argument("wcnf_file", type=Path)
     parser.add_argument("-m", "--minimize", action="store_true")
     parser.add_argument("-u", "--harden-unit-cores", action="store_true")
     parser.add_argument("-v", "--verbose", action="count", default=0)
+    parser.add_argument("-w", "--watched-models-csv", type=Path)
 
     args = parser.parse_args()
 
     # Parse the input according to the MaxSAT Evaluation WCNF 2024 standard.
     formula = WCNF.from_path(args.wcnf_file)
 
-    solver = Cuscus(formula, should_minimize=args.minimize, should_harden_unit_cores=args.harden_unit_cores, verbosity=args.verbose)
+    if args.watched_models_csv:
+        watched_models = parse_watched_models(formula.top_id)
+    else:
+        watched_models = []
+
+    solver = Cuscus(
+            formula,
+            should_minimize=args.minimize,
+            should_harden_unit_cores=args.harden_unit_cores,
+            verbosity=args.verbose,
+            watched_models=watched_models
+        )
+
     result = solver.solve()
 
     # Report the solution and exit according to the MaxSAT Evaluation 2024 standard.
@@ -550,8 +692,8 @@ if __name__ == "__main__":
         print("s OPTIMUM FOUND")
         print(f"o {cost}")
 
-        model_str = "".join(str(int(l > 0)) for l in sorted(model, key=lambda l: abs(l)))
-        print(f"v {model_str}")
+        model_bitstr = bitstr_from_model(model)
+        print(f"v {model_bitstr}")
 
         sys.exit(30)
     else:

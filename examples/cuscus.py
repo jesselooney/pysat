@@ -15,6 +15,7 @@ from pysat.card import ISeqCounter
 from pysat.formula import IDPool
 from pysat.solvers import Solver
 
+
 # Use our own formula and parser because PySAT's builtin has some bugs.
 # TODO: Document.
 @dataclass
@@ -69,10 +70,10 @@ class WCNF:
                 continue
             else:
                 raise ValueError(
-                        f"Invalid line header on line {line_number}: '{stripped_line}'\n"
-                        f"Lines must start with 'p', 'c', 'h', or a numeric weight, not '{parts[0]}'."
-                    )
-       
+                    f"Invalid line header on line {line_number}: '{stripped_line}'\n"
+                    f"Lines must start with 'p', 'c', 'h', or a numeric weight, not '{parts[0]}'."
+                )
+
         if variables:
             top_id = max(variables)
         else:
@@ -89,12 +90,14 @@ class WCNF:
         return True
 
     @staticmethod
-    def _parse_literals(line_number: int, stripped_line: str, parts: list[str]) -> list[int]:
+    def _parse_literals(
+        line_number: int, stripped_line: str, parts: list[str]
+    ) -> list[int]:
         if parts[-1] != "0":
             raise ValueError(
-                    f"Invalid clause on line {line_number}: '{stripped_line}'\n"
-                    f"Clauses must end with '0', not '{parts[-1]}'."
-                )
+                f"Invalid clause on line {line_number}: '{stripped_line}'\n"
+                f"Clauses must end with '0', not '{parts[-1]}'."
+            )
 
         literals: list[int] = []
         for index, literal_str in enumerate(parts[1:-1]):
@@ -102,23 +105,23 @@ class WCNF:
                 literal = int(literal_str)
             except ValueError:
                 raise ValueError(
-                        f"Invalid clause on line {line_number}: '{stripped_line}'\n"
-                        f"Clauses literals must be integers, but '{literal_str}' (index {index}) is not an integer."
-                    )
+                    f"Invalid clause on line {line_number}: '{stripped_line}'\n"
+                    f"Clauses literals must be integers, but '{literal_str}' (index {index}) is not an integer."
+                )
 
             if literal == 0:
                 raise ValueError(
-                        f"Invalid clause on line {line_number}: '{stripped_line}'\n"
-                        f"Clauses may not contain the variable 0 (found at index {index})."
-                    )
+                    f"Invalid clause on line {line_number}: '{stripped_line}'\n"
+                    f"Clauses may not contain the variable 0 (found at index {index})."
+                )
 
             literals.append(literal)
 
         if not literals:
             raise ValueError(
-                    f"Invalid clause on line {line_number}: '{stripped_line}'\n"
-                    "Empty clauses are not allowed."
-                )
+                f"Invalid clause on line {line_number}: '{stripped_line}'\n"
+                "Empty clauses are not allowed."
+            )
 
         return literals
 
@@ -132,15 +135,21 @@ class CardinalityMetadata:
 
     def __post_init__(self):
         if self.prefix_index not in range(len(self.prefixes)):
-            raise ValueError(f"`prefix_index` must index `prefixes`, but {self.prefix_index} is not in [0, {len(self.prefixes)})")
+            raise ValueError(
+                f"`prefix_index` must index `prefixes`, but {self.prefix_index} is not in [0, {len(self.prefixes)})"
+            )
         # A negative upper bound is impossible and not supported by
         # `ISeqCounter`.
         if self.upper_bound < 0:
-            raise ValueError(f"`upper_bound` must be non-negative, but {self.upper_bound} < 0")
+            raise ValueError(
+                f"`upper_bound` must be non-negative, but {self.upper_bound} < 0"
+            )
         # An upper bound equal to or exceeding the number of literals being
         # bounded is trivial and not supported by `ISeqCounter`.
         if self.upper_bound >= self.prefix_len:
-            raise ValueError(f"`upper_bound` must be less than `prefix_len`, but {self.upper_bound} >= {self.prefix_len}")
+            raise ValueError(
+                f"`upper_bound` must be less than `prefix_len`, but {self.upper_bound} >= {self.prefix_len}"
+            )
 
     @property
     def prefix(self) -> tuple[int, int]:
@@ -162,22 +171,26 @@ class CardinalityMetadata:
         # Add both of the consequents, skipping any that are invalid.
 
         try:
-            consequents.append(CardinalityMetadata(
-                encoder=self.encoder,
-                prefixes=self.prefixes,
-                prefix_index=self.prefix_index,
-                upper_bound=self.upper_bound + 1
-            ))
+            consequents.append(
+                CardinalityMetadata(
+                    encoder=self.encoder,
+                    prefixes=self.prefixes,
+                    prefix_index=self.prefix_index,
+                    upper_bound=self.upper_bound + 1,
+                )
+            )
         except ValueError:
             pass
 
         try:
-            consequents.append(CardinalityMetadata(
-                encoder=self.encoder,
-                prefixes=self.prefixes,
-                prefix_index=self.prefix_index - 1,
-                upper_bound=self.upper_bound
-            ))
+            consequents.append(
+                CardinalityMetadata(
+                    encoder=self.encoder,
+                    prefixes=self.prefixes,
+                    prefix_index=self.prefix_index - 1,
+                    upper_bound=self.upper_bound,
+                )
+            )
         except ValueError:
             pass
 
@@ -186,14 +199,14 @@ class CardinalityMetadata:
 
 class Cuscus:
     def __init__(
-            self,
-            formula: WCNF,
-            *,
-            should_harden_unit_cores: bool = False,
-            should_minimize: bool = False,
-            verbosity: int = 0,
-            watched_models: list[tuple[list[int], int | None]] = [],
-        ):
+        self,
+        formula: WCNF,
+        *,
+        should_harden_unit_cores: bool = False,
+        should_minimize: bool = False,
+        verbosity: int = 0,
+        watched_models: list[tuple[list[int], int | None]] = [],
+    ):
         self.should_harden_unit_cores = should_harden_unit_cores
         self.should_minimize = should_minimize
         self.verbosity = verbosity
@@ -225,10 +238,8 @@ class Cuscus:
 
         self._id_pool = IDPool(start_from=formula.top_id + 1)
         self._oracle = Solver(
-                name=self.solver_name,
-                bootstrap_with=formula.hard_clauses,
-                use_timer=True
-            )
+            name=self.solver_name, bootstrap_with=formula.hard_clauses, use_timer=True
+        )
 
         # Add the initial soft clauses to the problem formula.
         for clause, weight in formula.soft_clauses:
@@ -244,7 +255,7 @@ class Cuscus:
 
         Returns the selector literal that activates the clause.
         """
-        assert weight > 0 # TODO: Document that we dont except weights <= 0.
+        assert weight > 0  # TODO: Document that we dont except weights <= 0.
         # TODO: For unit clauses, perhaps reuse the literal as the selector.
         selector = self._id_pool.id()
         self._oracle.add_clause(clause + [-selector])
@@ -260,7 +271,7 @@ class Cuscus:
         Compute the cost of a model given some active selectors.
 
         `model` must be a list of literals representing a partial (or total)
-        assignment to the variables of the problem formula. 
+        assignment to the variables of the problem formula.
 
         Returns the total weight of all selectors in `active_selectors`
         contradicted by the model, or `None` if the model does not satisfy the
@@ -282,7 +293,9 @@ class Cuscus:
             model_cost = self._get_cost(model, active_selectors)
 
             if model_cost is None:
-                raise Exception(f"watched model {model_index} contradicts the hard clauses")
+                raise Exception(
+                    f"watched model {model_index} contradicts the hard clauses"
+                )
 
             computed_cost = model_cost + accrued_cost
 
@@ -290,13 +303,13 @@ class Cuscus:
             if expected_cost is None:
                 expected_cost = computed_cost
                 self.watched_models[model_index] = (model, expected_cost)
-            
+
             if computed_cost != expected_cost:
                 raise Exception(
-                        f"watched model {model_index} has unexpected cost\n"
-                        f"\texpected cost: {expected_cost}\n"
-                        f"\tcomputed cost: {computed_cost}"
-                    )
+                    f"watched model {model_index} has unexpected cost\n"
+                    f"\texpected cost: {expected_cost}\n"
+                    f"\tcomputed cost: {computed_cost}"
+                )
 
     def solve(self) -> tuple[int, list[int]] | None:
         """
@@ -336,7 +349,9 @@ class Cuscus:
 
             reduced_core: list[int] = self._reduce_core(core)
 
-            active_selectors, cost = self._relax_core(reduced_core, active_selectors, cost)
+            active_selectors, cost = self._relax_core(
+                reduced_core, active_selectors, cost
+            )
 
             # Verify any watched models against the new selectors and cost.
             if self.watched_models:
@@ -354,7 +369,9 @@ class Cuscus:
             processing_time = end_time - start_time
 
             if self.verbosity >= 1:
-                print(f"c oracle calls: {oracle_call_count}; cost: {cost}; core size: {len(reduced_core)}; processing time: {processing_time}")
+                print(
+                    f"c oracle calls: {oracle_call_count}; cost: {cost}; core size: {len(reduced_core)}; processing time: {processing_time}"
+                )
             if self.verbosity >= 2:
                 print(f"c core: {reduced_core}")
             oracle_call_count += 1
@@ -368,10 +385,7 @@ class Cuscus:
         # `model` contains extraneous variables added during solving, so we
         # filter it to return a model containing only variables that appeared
         # in the original formula we were given.
-        original_model: list[int] = [
-                l for l in model
-                if abs(l) in self._original_vars
-            ]
+        original_model: list[int] = [l for l in model if abs(l) in self._original_vars]
 
         if self.verbosity >= 1:
             print(f"c oracle time: {self._oracle.time_accum()}")
@@ -380,7 +394,7 @@ class Cuscus:
             print(f"c mean core size: {total_core_size / float(oracle_call_count - 1)}")
 
         return cost, original_model
-    
+
     def _reduce_core(self, core: list[int]) -> list[int]:
         # TODO: Document.
         reduced_core = core
@@ -405,7 +419,7 @@ class Cuscus:
 
         for i in range(len(sorted_core)):
             # Exclude a single selector from the original core.
-            possible_core: list[int] = sorted_core[:i] + sorted_core[i + 1:]
+            possible_core: list[int] = sorted_core[:i] + sorted_core[i + 1 :]
 
             match self._oracle.solve_limited(assumptions=possible_core):
                 case False:
@@ -422,8 +436,9 @@ class Cuscus:
         # If we did not find a smaller core, return the original one.
         return core
 
-
-    def _relax_core(self, core: list[int], active_selectors: list[int], cost: int) -> tuple[list[int], int]:
+    def _relax_core(
+        self, core: list[int], active_selectors: list[int], cost: int
+    ) -> tuple[list[int], int]:
         # TODO: Document.
         # Needed for the reasoning behind removing the at-most-zero constraint.
         assert len(core) >= 1
@@ -431,7 +446,9 @@ class Cuscus:
         # Relax the core literals.
         core_set: set[int] = set(core)
         self._relaxed_selectors |= core_set
-        next_active_selectors: list[int] = [s for s in active_selectors if s not in core_set]
+        next_active_selectors: list[int] = [
+            s for s in active_selectors if s not in core_set
+        ]
         next_cost = cost
 
         # Introduce any deferred cardinality constraints previously shadowed by
@@ -439,8 +456,8 @@ class Cuscus:
         for selector in core:
             if selector in self._cardinality_metadata:
                 next_active_selectors += self._get_consequent_selectors(
-                        self._cardinality_metadata[selector]
-                    )
+                    self._cardinality_metadata[selector]
+                )
 
         # If the core is unit, we short-circuit here since the constraints
         # below would be trivial.
@@ -461,10 +478,12 @@ class Cuscus:
         # constraint.
         next_cost += at_most_zero.weight
         next_active_selectors += self._get_consequent_selectors(at_most_zero)
-        
+
         return next_active_selectors, next_cost
 
-    def _get_consequent_selectors(self, cardinality_metadata: CardinalityMetadata) -> list[int]:
+    def _get_consequent_selectors(
+        self, cardinality_metadata: CardinalityMetadata
+    ) -> list[int]:
         """
         Return the selectors for consequents of `cardinality_metadata`.
 
@@ -480,10 +499,14 @@ class Cuscus:
         should be activated in the next round of solving.
         """
         consequents: list[CardinalityMetadata] = cardinality_metadata.consequents
-        selectors: list[int] = [self._create_cardinality_selector(c) for c in consequents]
+        selectors: list[int] = [
+            self._create_cardinality_selector(c) for c in consequents
+        ]
         return [s for s in selectors if s not in self._relaxed_selectors]
 
-    def _create_cardinality_selector(self, cardinality_metadata: CardinalityMetadata) -> int:
+    def _create_cardinality_selector(
+        self, cardinality_metadata: CardinalityMetadata
+    ) -> int:
         """
         Create a selector that enforces constraint denoted by `cardinality_metadata`.
 
@@ -502,7 +525,7 @@ class Cuscus:
         self._id_pool.top = encoder.top_id
         # Add only the new clauses generated by the encoder.
         if encoder.nof_new > 0:
-            for clause in encoder.cnf.clauses[-encoder.nof_new:]:
+            for clause in encoder.cnf.clauses[-encoder.nof_new :]:
                 self._add_hard_clause(clause)
 
         # The negation of this literal will enforce the cardinality constraint.
@@ -523,7 +546,9 @@ class Cuscus:
 
         return selector
 
-    def _initialize_cardinality_constraint(self, core: list[int]) -> CardinalityMetadata:
+    def _initialize_cardinality_constraint(
+        self, core: list[int]
+    ) -> CardinalityMetadata:
         """
         Initialize a cardinality constraint relaxing the core `core`.
 
@@ -546,22 +571,26 @@ class Cuscus:
         # `relaxation_literals` are the same, so that the computed `prefixes`
         # map correctly onto both.
         relaxation_literals: list[int] = [-l for l in sorted_core]
-    
+
         # Initialize the encoding.
-        encoder = ISeqCounter(lits=relaxation_literals, ubound=0, top_id=self._id_pool.top)
+        encoder = ISeqCounter(
+            lits=relaxation_literals, ubound=0, top_id=self._id_pool.top
+        )
         self._id_pool.top = encoder.top_id
         for clause in encoder.cnf.clauses:
             self._add_hard_clause(clause)
 
         return CardinalityMetadata(
-                encoder=encoder,
-                prefixes=prefixes,
-                # Use the last prefix, which is always the entire core.
-                prefix_index=len(prefixes) - 1,
-                upper_bound=0
-            )
+            encoder=encoder,
+            prefixes=prefixes,
+            # Use the last prefix, which is always the entire core.
+            prefix_index=len(prefixes) - 1,
+            upper_bound=0,
+        )
 
-    def _get_prefixes(self, selectors: list[int]) -> tuple[list[tuple[int, int]], list[int]]: 
+    def _get_prefixes(
+        self, selectors: list[int]
+    ) -> tuple[list[tuple[int, int]], list[int]]:
         """
         Compute the prefixes of a list of selectors.
 
@@ -580,9 +609,11 @@ class Cuscus:
             return [], []
 
         # Sort the selectors in order of decreasing weight.
-        sorted_selectors: list[int] = sorted(selectors, key=lambda s: self._selector_weights[s], reverse=True)
+        sorted_selectors: list[int] = sorted(
+            selectors, key=lambda s: self._selector_weights[s], reverse=True
+        )
         weights: list[int] = [self._selector_weights[s] for s in sorted_selectors]
-   
+
         prefixes: list[tuple[int, int]] = []
         for i, weight in enumerate(weights[:-1]):
             if weight != weights[i + 1]:
@@ -605,7 +636,7 @@ def bitstr_from_model(model: list[int]) -> str:
             bitstr[index] = "1"
 
     return "".join(bitstr)
-        
+
 
 def model_from_bitstr(bitstr: str) -> list[int]:
     # TODO: Document.
@@ -617,7 +648,9 @@ def model_from_bitstr(bitstr: str) -> list[int]:
         elif char == "1":
             model.append(var)
         else:
-            raise Exception(f"invalid model bitstring: the bitstring must contain only 0s and 1s but '{char}' was found at index {index}")
+            raise Exception(
+                f"invalid model bitstring: the bitstring must contain only 0s and 1s but '{char}' was found at index {index}"
+            )
 
     return model
 
@@ -631,19 +664,27 @@ def parse_watched_models(var_count: int) -> list[tuple[list[int], int | None]]:
         for row_index, row in enumerate(reader):
             # TODO: Handle the possible exception raised by `model_from_bitstr`.
             if row["model"] is None:
-                raise Exception(f"invalid data row at index {row_index}: missing value for column 'model'")
+                raise Exception(
+                    f"invalid data row at index {row_index}: missing value for column 'model'"
+                )
             model = model_from_bitstr(row["model"].strip())
             if len(model) != var_count:
-                raise Exception(f"invalid data row at index {row_index}: expected {var_count} variables, but model bitstring gives {len(model)}")
+                raise Exception(
+                    f"invalid data row at index {row_index}: expected {var_count} variables, but model bitstring gives {len(model)}"
+                )
 
             if row["cost"] is None:
-                raise Exception(f"invalid data row at index {row_index}: missing value for column 'cost'")
+                raise Exception(
+                    f"invalid data row at index {row_index}: missing value for column 'cost'"
+                )
             cost_str = row["cost"].strip()
             if cost_str:
                 try:
                     cost = int(cost_str)
                 except ValueError:
-                    raise Exception(f"invalid data row at index {row_index}: cost must be an integer, but '{cost_str}' is not")
+                    raise Exception(
+                        f"invalid data row at index {row_index}: cost must be an integer, but '{cost_str}' is not"
+                    )
             else:
                 cost = None
 
@@ -654,10 +695,9 @@ def parse_watched_models(var_count: int) -> list[tuple[list[int], int | None]]:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-            prog="cuscus",
-            description="An RC2-like MaxSAT solver without cloning."
-        )
-    
+        prog="cuscus", description="An RC2-like MaxSAT solver without cloning."
+    )
+
     # TODO: Document the arguments with help text.
     parser.add_argument("wcnf_file", type=Path)
     parser.add_argument("-m", "--minimize", action="store_true")
@@ -676,12 +716,12 @@ if __name__ == "__main__":
         watched_models = []
 
     solver = Cuscus(
-            formula,
-            should_minimize=args.minimize,
-            should_harden_unit_cores=args.harden_unit_cores,
-            verbosity=args.verbose,
-            watched_models=watched_models
-        )
+        formula,
+        should_minimize=args.minimize,
+        should_harden_unit_cores=args.harden_unit_cores,
+        verbosity=args.verbose,
+        watched_models=watched_models,
+    )
 
     result = solver.solve()
 
@@ -700,4 +740,3 @@ if __name__ == "__main__":
         print("s UNSATISFIABLE")
 
         sys.exit(20)
-

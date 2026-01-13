@@ -356,7 +356,7 @@ class Cuscus:
             total_core_size += len(reduced_core)
 
             active_selectors, cost = self._relax_core(
-                reduced_core, active_selectors, cost
+                set(reduced_core), active_selectors, cost
             )
 
             if len(core) == 1 and self.should_harden_unit_cores:
@@ -382,6 +382,10 @@ class Cuscus:
 
             # Ensure we haven't accidentally activated a previously relaxed selector.
             assert set(active_selectors).isdisjoint(self._relaxed_selectors)
+            # Ensure `active_selectors` has no duplicate values, as there is no
+            # reason to have duplicates. Also, keeping this invariant may
+            # reduce the likelihood of unexpected behavior.
+            assert len(active_selectors) == len(set(active_selectors))
 
         # We have relaxed the problem formula enough to make it satisfiable.
 
@@ -444,32 +448,35 @@ class Cuscus:
         return core
 
     def _relax_core(
-        self, core: list[int], active_selectors: list[int], cost: int
+        self, core: set[int], active_selectors: list[int], cost: int
     ) -> tuple[list[int], int]:
         # TODO: Document.
         # Needed for the reasoning behind removing the at-most-zero constraint.
         assert len(core) >= 1
 
-        # Relax the core literals.
-        core_set: set[int] = set(core)
-        self._relaxed_selectors |= core_set
-        next_active_selectors: list[int] = [
-            s for s in active_selectors if s not in core_set
-        ]
         next_cost = cost
+
+        # Relax the core literals.
+        self._relaxed_selectors |= core
+        next_active_selectors: list[int] = [
+            s for s in active_selectors if s not in core
+        ]
 
         # Introduce any deferred cardinality constraints previously shadowed by
         # the ones we just deactivated.
+        new_selectors: set[int] = set()
         for selector in core:
             if selector in self._cardinality_metadata:
-                next_active_selectors += self._get_consequent_selectors(
+                new_selectors |= self._get_consequent_selectors(
                     self._cardinality_metadata[selector]
                 )
 
         # If the core is unit, we short-circuit here since the constraints
         # below would be trivial.
         if len(core) == 1:
-            next_cost += self._selector_weights[core[0]]
+            # The sole selector in `core`.
+            selector = next(iter(core))
+            next_cost += self._selector_weights[selector]
             return next_active_selectors, next_cost
 
         # Initialize a set of cardinality constraints on the variables of
@@ -478,19 +485,24 @@ class Cuscus:
         # implies all the rest of the constraints, so we need not add them all
         # immediately.
         at_most_zero = self._initialize_cardinality_constraint(core)
+        assert at_most_zero.prefix_len == len(core)
 
         # We already know the `at_most_zero` constraint is unsatisfiable,
         # because the core `core` tells us at least one of the selectors must
         # be falsified, so we can just increment the cost and relax this
         # constraint.
         next_cost += at_most_zero.weight
-        next_active_selectors += self._get_consequent_selectors(at_most_zero)
+        new_selectors |= self._get_consequent_selectors(at_most_zero)
+
+        # Add the new selectors to the next active selectors without
+        # duplicating any selectors.
+        next_active_selectors += [s for s in new_selectors if s not in next_active_selectors]
 
         return next_active_selectors, next_cost
 
     def _get_consequent_selectors(
         self, cardinality_metadata: CardinalityMetadata
-    ) -> list[int]:
+    ) -> set[int]:
         """
         Return the selectors for consequents of `cardinality_metadata`.
 
@@ -509,7 +521,7 @@ class Cuscus:
         selectors: list[int] = [
             self._create_cardinality_selector(c) for c in consequents
         ]
-        return [s for s in selectors if s not in self._relaxed_selectors]
+        return {s for s in selectors if s not in self._relaxed_selectors}
 
     def _create_cardinality_selector(
         self, cardinality_metadata: CardinalityMetadata
@@ -554,7 +566,7 @@ class Cuscus:
         return selector
 
     def _initialize_cardinality_constraint(
-        self, core: list[int]
+        self, core: set[int]
     ) -> CardinalityMetadata:
         """
         Initialize a cardinality constraint relaxing the core `core`.
@@ -596,10 +608,10 @@ class Cuscus:
         )
 
     def _get_prefixes(
-        self, selectors: list[int]
+        self, selectors: set[int]
     ) -> tuple[list[tuple[int, int]], list[int]]:
         """
-        Compute the prefixes of a list of selectors.
+        Compute the prefixes of a set of selectors.
 
         Note that a literal is only considered a "selector" if it is tracked in
         `self._selector_weights`. This method does not work for arbitrary

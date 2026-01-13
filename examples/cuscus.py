@@ -359,8 +359,8 @@ class Cuscus:
                 set(reduced_core), active_selectors, cost
             )
 
-            if len(core) == 1 and self.should_harden_unit_cores:
-                self._add_hard_clause([-core[0]])
+            if len(reduced_core) == 1 and self.should_harden_unit_cores:
+                self._add_hard_clause([-reduced_core[0]])
 
             # TODO: Add core exhaustion.
 

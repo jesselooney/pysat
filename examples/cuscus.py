@@ -464,12 +464,14 @@ class Cuscus:
 
         # Introduce any deferred cardinality constraints previously shadowed by
         # the ones we just deactivated.
-        new_selectors: set[int] = set()
+        revealed_selectors: set[int] = set()
         for selector in core:
             if selector in self._cardinality_metadata:
-                new_selectors |= self._get_consequent_selectors(
+                revealed_selectors |= self._get_consequent_selectors(
                     self._cardinality_metadata[selector]
                 )
+
+        next_active_selectors += [s for s in revealed_selectors if s not in next_active_selectors]
 
         # If the core is unit, we short-circuit here since the constraints
         # below would be trivial.
@@ -492,10 +494,8 @@ class Cuscus:
         # be falsified, so we can just increment the cost and relax this
         # constraint.
         next_cost += at_most_zero.weight
-        new_selectors |= self._get_consequent_selectors(at_most_zero)
+        new_selectors: set[int] = self._get_consequent_selectors(at_most_zero)
 
-        # Add the new selectors to the next active selectors without
-        # duplicating any selectors.
         next_active_selectors += [s for s in new_selectors if s not in next_active_selectors]
 
         return next_active_selectors, next_cost

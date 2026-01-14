@@ -203,6 +203,7 @@ class Cuscus:
         *,
         should_harden_unit_cores: bool = False,
         should_minimize: bool = False,
+        solver_name: str = "cadical195",
         verbosity: int = 0,
         watched_models: list[tuple[list[int], int | None]] = [],
     ):
@@ -218,7 +219,7 @@ class Cuscus:
         # TODO: Give an example input and its interpretation.
         self.watched_models: list[tuple[list[int], int | None]] = watched_models
 
-        self.solver_name = "cadical195"
+        self.solver_name = solver_name
         self.minimization_max_conflicts = 1000
 
         # The set of variables that appear in the original formula we were
@@ -370,7 +371,7 @@ class Cuscus:
 
             if self.verbosity >= 1:
                 print(
-                    f"c cores found: {core_count}; cost: {cost}; core size: {len(reduced_core)}; processing time: {processing_time}"
+                        f"c cores found: {core_count}; cost: {cost}; core size: {len(reduced_core)}; soft size: {len(active_selectors)}; processing time: {processing_time}"
                 )
             if self.verbosity >= 2:
                 print(f"c reduced core: {reduced_core}")
@@ -720,6 +721,7 @@ if __name__ == "__main__":
     # TODO: Document the arguments with help text.
     parser.add_argument("wcnf_file", type=Path)
     parser.add_argument("-m", "--minimize", action="store_true")
+    parser.add_argument("-o", "--oracle", default="cadical195")
     parser.add_argument("-u", "--harden-unit-cores", action="store_true")
     parser.add_argument("-v", "--verbose", action="count", default=0)
     parser.add_argument("-w", "--watched-models-csv", type=Path)
@@ -738,6 +740,7 @@ if __name__ == "__main__":
         formula,
         should_minimize=args.minimize,
         should_harden_unit_cores=args.harden_unit_cores,
+        solver_name=args.oracle,
         verbosity=args.verbose,
         watched_models=watched_models,
     )

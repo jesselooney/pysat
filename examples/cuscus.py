@@ -455,6 +455,8 @@ class Cuscus:
         self, core: set[int], active_selectors: list[int], cost: int
     ) -> tuple[list[int], int]:
         # TODO: Document.
+        assert core <= set(active_selectors)
+        assert core.isdisjoint(self._relaxed_selectors)
         # Needed for the reasoning behind removing the at-most-zero constraint.
         assert len(core) >= 1
 

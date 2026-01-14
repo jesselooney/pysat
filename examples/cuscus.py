@@ -238,6 +238,10 @@ class Cuscus:
         # A mapping from selector literals representing cardinality constraints
         # to metadata for the constraint.
         self._cardinality_metadata: dict[int, CardinalityMetadata] = {}
+        # Selectors that are intended to be added but which have been deferred.
+        # May include already relaxed selectors, so check against
+        # `self._relaxed_selectors`. Intended for use in model watching.
+        self._deferred_selectors: set[int] = set()
 
         self._id_pool = IDPool(start_from=formula.top_id + 1)
         self._oracle = Solver(
@@ -298,12 +302,17 @@ class Cuscus:
 
     def _verify_watched_models(self, active_selectors: list[int], accrued_cost: int):
         for model_index, (model, expected_cost) in enumerate(self.watched_models):
-            model_cost = self._get_cost(model, active_selectors)
+            active_cost = self._get_cost(model, active_selectors)
 
-            if model_cost is None:
+            pending_selectors: set[int] = self._deferred_selectors - (self._relaxed_selectors | set(active_selectors))
+            pending_cost = self._get_cost(model, list(pending_selectors))
+
+            if active_cost is None or pending_cost is None:
                 raise Exception(
                     f"watched model {model_index} contradicts the hard clauses"
                 )
+            
+            model_cost: int = active_cost + pending_cost
 
             computed_cost = model_cost + accrued_cost
 
@@ -327,6 +336,9 @@ class Cuscus:
         minimal cost `cost`. If the hard clauses of the formula are
         unsatisfiable, this method returns `None` instead.
         """
+        if not self._oracle.solve():
+            # The hard clauses are unsatisfiable.
+            return None
 
         # The set of selectors whose clauses should be activated. We start by
         # activating all selectors.
@@ -334,13 +346,23 @@ class Cuscus:
         # The cost accrued so far due to forced clause falsifications.
         cost = 0
 
+        active_selectors, cost = self.solve_with_threshold(active_selectors, cost, 0)
+
+        model: list[int] = self._oracle.get_model()
+
+        # `model` contains extraneous variables added during solving, so we
+        # filter it to return a model containing only variables that appeared
+        # in the original formula we were given.
+        original_model: list[int] = [
+            lit for lit in model if abs(lit) in self._original_vars
+        ]
+
+        return cost, original_model
+
+    def solve_with_threshold(self, active_selectors: list[int], cost: int, min_weight: int) -> tuple[list[int], int]:
         # Verify any watched models against the initial selectors and cost.
         if self.watched_models:
             self._verify_watched_models(active_selectors, cost)
-
-        # TODO: Detect intrinsic at-most-1 constraints.
-
-        # TODO: Add stratification.
 
         core_count = 0
         total_processing_time = 0
@@ -348,21 +370,21 @@ class Cuscus:
 
         if self.should_transform_am1s:
             active_selectors, cost = self._transform_am1s(active_selectors, cost)
+            # Verify any watched models after transforming am1s.
+            if self.watched_models:
+                self._verify_watched_models(active_selectors, cost)
 
-        while not self._oracle.solve(assumptions=active_selectors):
+        while not self._oracle.solve(assumptions=[s for s in active_selectors if self._selector_weights[s] >= min_weight]):
             start_time = time.perf_counter()
 
             core: list[int] = self._oracle.get_core()
+            assert core
             core_count += 1
-
-            if not core:
-                # The core is empty, so the hard clauses are unsatisfiable.
-                return None
 
             reduced_core: list[int] = self._reduce_core(core)
             total_core_size += len(reduced_core)
 
-            active_selectors, cost = self._relax_core(
+            active_selectors, cost = self._transform_core(
                 set(reduced_core), active_selectors, cost
             )
 
@@ -391,24 +413,15 @@ class Cuscus:
             # reduce the likelihood of unexpected behavior.
             assert len(active_selectors) == len(set(active_selectors))
 
-        # We have relaxed the problem formula enough to make it satisfiable.
-
-        model: list[int] = self._oracle.get_model()
-
-        # `model` contains extraneous variables added during solving, so we
-        # filter it to return a model containing only variables that appeared
-        # in the original formula we were given.
-        original_model: list[int] = [
-            lit for lit in model if abs(lit) in self._original_vars
-        ]
-
         if self.verbosity >= 1:
             print(f"c oracle time: {self._oracle.time_accum()}")
             print(f"c total processing time: {total_processing_time}")
             print(f"c cores found: {core_count}")
-            print(f"c mean core size: {total_core_size / float(core_count)}")
+            if core_count:
+                print(f"c mean core size: {total_core_size / float(core_count)}")
 
-        return cost, original_model
+        # We have relaxed the problem formula enough to make it satisfiable.
+        return active_selectors, cost
 
     def _reduce_core(self, core: list[int]) -> list[int]:
         # TODO: Document.
@@ -451,27 +464,20 @@ class Cuscus:
         # If we did not find a smaller core, return the original one.
         return core
 
-    def _relax_core(
-        self, core: set[int], active_selectors: list[int], cost: int
-    ) -> tuple[list[int], int]:
-        # TODO: Document.
-        assert core <= set(active_selectors)
-        assert core.isdisjoint(self._relaxed_selectors)
-        # Needed for the reasoning behind removing the at-most-zero constraint.
-        assert len(core) >= 1
+    def _relax_selectors(self, victim_selectors: set[int], active_selectors: list[int]) -> list[int]:
+        assert victim_selectors <= set(active_selectors)
+        assert victim_selectors.isdisjoint(self._relaxed_selectors)
 
-        next_cost = cost
-
-        # Relax the core literals.
-        self._relaxed_selectors |= core
+        # Remove the victim selectors.
+        self._relaxed_selectors |= victim_selectors
         next_active_selectors: list[int] = [
-            s for s in active_selectors if s not in core
+            s for s in active_selectors if s not in victim_selectors
         ]
 
         # Introduce any deferred cardinality constraints previously shadowed by
-        # the ones we just deactivated.
+        # the ones we just relaxed.
         revealed_selectors: set[int] = set()
-        for selector in core:
+        for selector in victim_selectors:
             if selector in self._cardinality_metadata:
                 revealed_selectors |= self._get_consequent_selectors(
                     self._cardinality_metadata[selector]
@@ -480,6 +486,18 @@ class Cuscus:
         next_active_selectors += [
             s for s in revealed_selectors if s not in next_active_selectors
         ]
+
+        return next_active_selectors
+
+    def _transform_core(
+        self, core: set[int], active_selectors: list[int], cost: int
+    ) -> tuple[list[int], int]:
+        # TODO: Document.
+        # Needed for the reasoning behind removing the at-most-zero constraint.
+        assert len(core) >= 1
+
+        next_active_selectors = self._relax_selectors(core, active_selectors)
+        next_cost = cost
 
         # If the core is unit, we short-circuit here since the constraints
         # below would be trivial.
@@ -498,6 +516,30 @@ class Cuscus:
         # immediately.
         at_most_zero = self._initialize_cardinality_constraint(core)
         assert at_most_zero.prefix_len == len(core)
+       
+        # Track the deferred cardinality constraints if we are watching models.
+        # Note that this does add clauses to the oracle, so it may change the
+        # behavior.
+        if self.watched_models:
+            new_deferred_selectors: set[int] = set()
+            for prefix_index in range(len(at_most_zero.prefixes)):
+                for upper_bound in range(at_most_zero.prefix_len):
+                    if prefix_index == len(at_most_zero.prefixes) - 1 and upper_bound == 0:
+                        continue
+                    try:
+                        new_deferred_selectors.add(
+                            self._create_cardinality_selector(
+                                CardinalityMetadata(
+                                    encoder=at_most_zero.encoder,
+                                    prefixes=at_most_zero.prefixes,
+                                    prefix_index=prefix_index,
+                                    upper_bound=upper_bound,
+                                )
+                            )
+                        )
+                    except ValueError:
+                        pass
+            self._deferred_selectors |= new_deferred_selectors
 
         # We already know the `at_most_zero` constraint is unsatisfiable,
         # because the core `core` tells us at least one of the selectors must
@@ -660,7 +702,7 @@ class Cuscus:
         next_cost = cost
 
         for core_selector in unit_cores:
-            next_active_selectors, next_cost = self._relax_core(
+            next_active_selectors, next_cost = self._transform_core(
                 {core_selector}, next_active_selectors, next_cost
             )
             if self.verbosity >= 1:
@@ -780,9 +822,9 @@ class Cuscus:
         assert am1 <= set(active_selectors)
         assert len(am1) >= 2
 
+        # Relax the original individual constraints.
+        next_active_selectors = self._relax_selectors(am1, active_selectors)
         next_cost = cost
-        # Remove the original individual constraints.
-        next_active_selectors: list[int] = [s for s in active_selectors if s not in am1]
 
         prefixes, sorted_am1 = self._get_prefixes(am1)
 

@@ -346,7 +346,23 @@ class Cuscus:
         # The cost accrued so far due to forced clause falsifications.
         cost = 0
 
-        active_selectors, cost = self.solve_with_threshold(active_selectors, cost, 0)
+        all_weights = {self._selector_weights[s] for s in active_selectors}
+        # TODO: Maybe set this parameter somewhere else.
+        self.diversity_threshold = len(all_weights) / 2.0
+        # Not a typo. We initialize the minimum weight threshold to the highest
+        # weight in the formula and then iteratively decrease it to add in
+        # smaller weight clauses.
+        min_weight = max(all_weights) if all_weights else 0
+
+        # TODO: Figure out a way around this hack.
+        next_min_weight = self._get_next_min_weight(min_weight, active_selectors)
+        if next_min_weight is not None:
+            min_weight = next_min_weight
+        
+        while min_weight:
+            active_selectors, cost = self.solve_with_threshold(active_selectors, cost, min_weight)
+            # TODO: Harden clauses
+            min_weight = self._get_next_min_weight(min_weight, active_selectors)
 
         model: list[int] = self._oracle.get_model()
 
@@ -358,6 +374,34 @@ class Cuscus:
         ]
 
         return cost, original_model
+
+    def _get_next_min_weight(self, min_weight: int, active_selectors: list[int]) -> int | None:
+        all_weights: set[int] = {self._selector_weights[s] for s in active_selectors}
+        smaller_weights = sorted([weight for weight in all_weights if weight < min_weight], reverse=True)
+
+        if not smaller_weights:
+            return None
+
+        for new_min_weight in smaller_weights[:-1]:
+            # The weight of each active selector whose weight is less than `new_min_weight`.
+            # TODO: This is a really confusing name given `smaller_weights` above.
+            smaller_selector_weights = [s for s in active_selectors if self._selector_weights[s] < new_min_weight]
+
+            # The number of selectors with weight less than `new_min_weight`.
+            smaller_selector_count = len(smaller_selector_weights)
+
+            # The sum of the weights of those selectors.
+            smaller_weight_total = sum(smaller_selector_weights)
+
+            # "partial BLO" according to RC2
+            # TODO: why check that `smaller_weight_total != 0`?
+            if new_min_weight > smaller_weight_total and smaller_weight_total != 0:
+                return new_min_weight
+
+            if smaller_selector_count / float(len(set(smaller_selector_weights))) > self.diversity_threshold:
+                return new_min_weight
+
+        return smaller_weights[-1]
 
     def solve_with_threshold(self, active_selectors: list[int], cost: int, min_weight: int) -> tuple[list[int], int]:
         # Verify any watched models against the initial selectors and cost.

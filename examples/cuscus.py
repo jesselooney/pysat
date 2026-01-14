@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import csv
 from dataclasses import dataclass
 from pathlib import Path
@@ -203,12 +204,14 @@ class Cuscus:
         *,
         should_harden_unit_cores: bool = False,
         should_minimize: bool = False,
+        should_transform_am1s: bool = False,
         solver_name: str = "cadical195",
         verbosity: int = 0,
         watched_models: list[tuple[list[int], int | None]] = [],
     ):
         self.should_harden_unit_cores = should_harden_unit_cores
         self.should_minimize = should_minimize
+        self.should_transform_am1s = should_transform_am1s
         self.verbosity = verbosity
         # A list of models and their expected costs to watch as the solver
         # runs. If a watched model's calculated cost ever differs from its
@@ -343,6 +346,9 @@ class Cuscus:
         total_processing_time = 0
         total_core_size = 0
 
+        if self.should_transform_am1s:
+            active_selectors, cost = self._transform_am1s(active_selectors, cost)
+
         while not self._oracle.solve(assumptions=active_selectors):
             start_time = time.perf_counter()
 
@@ -360,9 +366,6 @@ class Cuscus:
                 set(reduced_core), active_selectors, cost
             )
 
-            if len(reduced_core) == 1 and self.should_harden_unit_cores:
-                self._add_hard_clause([-reduced_core[0]])
-
             # TODO: Add core exhaustion.
 
             end_time = time.perf_counter()
@@ -371,7 +374,7 @@ class Cuscus:
 
             if self.verbosity >= 1:
                 print(
-                        f"c cores found: {core_count}; cost: {cost}; core size: {len(reduced_core)}; soft size: {len(active_selectors)}; processing time: {processing_time}"
+                    f"c cores found: {core_count}; cost: {cost}; core size: {len(reduced_core)}; soft size: {len(active_selectors)}; processing time: {processing_time}"
                 )
             if self.verbosity >= 2:
                 print(f"c reduced core: {reduced_core}")
@@ -472,7 +475,9 @@ class Cuscus:
                     self._cardinality_metadata[selector]
                 )
 
-        next_active_selectors += [s for s in revealed_selectors if s not in next_active_selectors]
+        next_active_selectors += [
+            s for s in revealed_selectors if s not in next_active_selectors
+        ]
 
         # If the core is unit, we short-circuit here since the constraints
         # below would be trivial.
@@ -480,6 +485,8 @@ class Cuscus:
             # The sole selector in `core`.
             selector = next(iter(core))
             next_cost += self._selector_weights[selector]
+            if self.should_harden_unit_cores:
+                self._add_hard_clause([-selector])
             return next_active_selectors, next_cost
 
         # Initialize a set of cardinality constraints on the variables of
@@ -497,7 +504,9 @@ class Cuscus:
         next_cost += at_most_zero.weight
         new_selectors: set[int] = self._get_consequent_selectors(at_most_zero)
 
-        next_active_selectors += [s for s in new_selectors if s not in next_active_selectors]
+        next_active_selectors += [
+            s for s in new_selectors if s not in next_active_selectors
+        ]
 
         return next_active_selectors, next_cost
 
@@ -566,9 +575,7 @@ class Cuscus:
 
         return selector
 
-    def _initialize_cardinality_constraint(
-        self, core: set[int]
-    ) -> CardinalityMetadata:
+    def _initialize_cardinality_constraint(self, core: set[int]) -> CardinalityMetadata:
         """
         Initialize a cardinality constraint relaxing the core `core`.
 
@@ -641,6 +648,156 @@ class Cuscus:
         prefixes.append((len(weights), weights[-1]))
 
         return prefixes, sorted_selectors
+
+    def _transform_am1s(
+        self, active_selectors: list[int], cost: int
+    ) -> tuple[list[int], int]:
+        am1s, unit_cores = self._find_am1s(active_selectors)
+
+        next_active_selectors = active_selectors[:]
+        next_cost = cost
+
+        for core_selector in unit_cores:
+            next_active_selectors, next_cost = self._relax_core(
+                {core_selector}, next_active_selectors, next_cost
+            )
+            if self.verbosity >= 1:
+                print(f"c found unit core; cost: {next_cost}")
+
+        for am1 in am1s:
+            next_active_selectors, next_cost = self._transform_am1(
+                am1, next_active_selectors, next_cost
+            )
+            if self.verbosity >= 1:
+                print(f"c am1 size: {len(am1)}; cost: {next_cost}")
+
+        return next_active_selectors, next_cost
+
+    def _find_am1s(
+        self, active_selectors: list[int]
+    ) -> tuple[list[set[int]], set[int]]:
+        """
+        Find intrinsic at-most-one constraints among selectors in `active_selectors`.
+
+        Identifies disjoint sets of selectors of which at most one can be true.
+        We do this by building a graph whose vertices are active selectors, with
+        vertices considered adjacent if their selectors are incompatible---that
+        is, if at most one of the pair can be true. We find disjoint maximal
+        cliques in the graph, which are then sets of selectors with the desired
+        property.
+
+        While identifying the selectors incompatible with a given one, we may
+        find selectors that intrinsically false on their own, forming unit
+        cores. These are excluded from the graph to be handled separately.
+
+        Returns `(am1s, unit_cores)` where `am1s` is a list of cliques found
+        and `unit_cores` is a set containing intrinsically false selectors.
+        """
+
+        # The graph we will build, represented as adjacency lists. `incompatibles[s]`
+        # will give the selectors incompatible with a selector `s`.
+        incompatibles: dict[int, set[int]] = collections.defaultdict(lambda: set())
+        unit_cores: set[int] = set()
+
+        # Identify the incompatibles for each active selector.
+        for s in active_selectors:
+            # TODO: How to choose the phase-saving parameter? I just got this
+            # straight from RC2.
+            is_satisfiable, consequents = self._oracle.propagate(
+                assumptions=[s], phase_saving=2
+            )
+
+            if not is_satisfiable:
+                # `s` forms a unit core, which we can handle separately.
+                unit_cores.add(s)
+                continue
+
+            for t in consequents:
+                if -t in active_selectors:
+                    # `s` and `-t` are both in `active_selectors` (so we care
+                    # about them) but at most one of them can be true.
+                    incompatibles[s].add(-t)
+                    incompatibles[-t].add(s)
+
+        # Filter out any unit cores we found so they do not appear as keys or
+        # in the incompatibility sets and bloat the constraints. We also
+        # eliminate any selectors whose incompatibles are reduced to the empty
+        # set by this operation.
+        incompatibles = {
+            k: v - unit_cores
+            for k, v in incompatibles.items()
+            if k not in unit_cores and len(v - unit_cores) > 0
+        }
+
+        # We find intrinsic at-most-one constraints by finding cliques in the
+        # graph defined by `incompatibles`. Cliques of size less than two
+        # represent trivial at-most-one constraints, so we omit them.
+        am1s: list[set[int]] = [
+            c for c in self._find_disjoint_maximal_cliques(incompatibles) if len(c) >= 2
+        ]
+
+        return am1s, unit_cores
+
+    def _find_disjoint_maximal_cliques(
+        self, graph: dict[int, set[int]]
+    ) -> list[set[int]]:
+        # TODO: Document.
+        # It is important that we find *disjoint* cliques, because the am1s we ultimately want to find must be disjoint for our processing to work.
+
+        cliques: list[set[int]] = []
+
+        while graph:
+            # Start from some vertex. We will find a maximal clique containing it.
+            base_vertex = min(graph.keys(), key=lambda v: len(graph[v]))
+            clique: set[int] = {base_vertex}
+
+            # Greedily add neighbors to the clique (until it cannot be grown further).
+            neighbors = sorted(graph[base_vertex], key=lambda v: len(graph[v]))
+            for vertex in neighbors:
+                if clique <= graph[vertex]:
+                    # The clique is entirely contained in the neighborhood of
+                    # `vertex`, so we can grow the clique by adding `vertex`.
+                    clique.add(vertex)
+
+            # Remove the clique from the graph so we don't repeat our work.
+            # TODO: Explain why we do not need to filter out keys mapped to
+            # empty sets like above (we would have added such a key to the clique).
+            graph = {
+                vertex: neighbors - clique
+                for vertex, neighbors in graph.items()
+                if vertex not in clique
+            }
+
+            cliques.append(clique)
+
+        return cliques
+
+    def _transform_am1(
+        self, am1: set[int], active_selectors: list[int], cost: int
+    ) -> tuple[list[int], int]:
+        assert am1 <= set(active_selectors)
+        assert len(am1) >= 2
+
+        next_cost = cost
+        # Remove the original individual constraints.
+        next_active_selectors: list[int] = [s for s in active_selectors if s not in am1]
+
+        prefixes, sorted_am1 = self._get_prefixes(am1)
+
+        for prefix_len, marginal_weight in prefixes:
+            assert prefix_len >= 1
+            # We know `prefix_len - 1` at-least-i clauses in this prefix are false.
+            next_cost += (prefix_len - 1) * marginal_weight
+
+            # We add the remaining at-least-1 clause that may or may not be
+            # satisfiable.
+            new_selector = self._add_soft_clause(
+                [s for s in sorted_am1[:prefix_len]],
+                marginal_weight,
+            )
+            next_active_selectors.append(new_selector)
+
+        return next_active_selectors, next_cost
 
 
 def bitstr_from_model(model: list[int]) -> str:
@@ -720,6 +877,7 @@ if __name__ == "__main__":
 
     # TODO: Document the arguments with help text.
     parser.add_argument("wcnf_file", type=Path)
+    parser.add_argument("-a", "--transform-am1s", action="store_true")
     parser.add_argument("-m", "--minimize", action="store_true")
     parser.add_argument("-o", "--oracle", default="cadical195")
     parser.add_argument("-u", "--harden-unit-cores", action="store_true")
@@ -740,6 +898,7 @@ if __name__ == "__main__":
         formula,
         should_minimize=args.minimize,
         should_harden_unit_cores=args.harden_unit_cores,
+        should_transform_am1s=args.transform_am1s,
         solver_name=args.oracle,
         verbosity=args.verbose,
         watched_models=watched_models,

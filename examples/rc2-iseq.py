@@ -132,6 +132,7 @@
 #==============================================================================
 from __future__ import print_function
 import collections
+from dataclasses import dataclass
 import getopt
 import itertools
 from math import copysign
@@ -140,6 +141,7 @@ from pysat.formula import CNFPlus, WCNFPlus, IDPool
 from pysat.card import ISeqCounter
 from pysat.process import Processor
 from pysat.solvers import Solver, SolverNames
+from pysat._fileio import FileObject
 import re
 import six
 from six.moves import range
@@ -150,6 +152,112 @@ import sys
 #==============================================================================
 blomap = {'none': 0, 'basic': 1, 'div': 3, 'cluster': 5, 'full': 7}
 
+@dataclass
+class WCNF:
+    soft_clauses: list[tuple[list[int], int]]
+    hard_clauses: list[list[int]]
+    # The largest variable id used in the formula. Equivalent to the maximum
+    # absolute value of any literal. If the formula has no variables, we define
+    # `top_id` to be zero.
+    top_id: int
+
+    @classmethod
+    def from_path(cls, path):
+        # Read the file, using the extension to determine how to decompress.
+        with FileObject(name=path, mode="r", compression="use_ext") as file:
+            return cls.from_file(file.fp)
+
+    @classmethod
+    def from_file(cls, file):
+        soft_clauses: list[tuple[list[int], int]] = []
+        hard_clauses: list[list[int]] = []
+
+        variables: set[int] = set()
+
+        for line_number, line in enumerate(file.readlines(), start=1):
+            stripped_line = line.strip()
+
+            # Ignore empty lines.
+            if not stripped_line:
+                continue
+
+            parts: list[str] = stripped_line.split()
+
+            if parts[0] == "h":
+                # Hard clause.
+                clause = WCNF._parse_literals(line_number, stripped_line, parts)
+                variables |= {abs(lit) for lit in clause}
+                hard_clauses.append(clause)
+            elif WCNF._is_int(parts[0]):
+                # Soft clause.
+                weight = int(parts[0])
+                if weight <= 0:
+                    raise ValueError(
+                        f"Invalid clause on line {line_number}: '{stripped_line}'\n"
+                        f"Soft clauses must have positive weight, but {weight} is not positive."
+                    )
+                clause = WCNF._parse_literals(line_number, stripped_line, parts)
+                variables |= {abs(lit) for lit in clause}
+                soft_clauses.append((clause, weight))
+            elif parts[0][0] in "pc":
+                # Problem statement or comment line; ignore.
+                continue
+            else:
+                raise ValueError(
+                    f"Invalid line header on line {line_number}: '{stripped_line}'\n"
+                    f"Lines must start with 'p', 'c', 'h', or a numeric weight, not '{parts[0]}'."
+                )
+
+        if variables:
+            top_id = max(variables)
+        else:
+            top_id = 0
+
+        return cls(soft_clauses=soft_clauses, hard_clauses=hard_clauses, top_id=top_id)
+
+    @staticmethod
+    def _is_int(string: str) -> bool:
+        try:
+            int(string)
+        except ValueError:
+            return False
+        return True
+
+    @staticmethod
+    def _parse_literals(
+        line_number: int, stripped_line: str, parts: list[str]
+    ) -> list[int]:
+        if parts[-1] != "0":
+            raise ValueError(
+                f"Invalid clause on line {line_number}: '{stripped_line}'\n"
+                f"Clauses must end with '0', not '{parts[-1]}'."
+            )
+
+        literals: list[int] = []
+        for index, literal_str in enumerate(parts[1:-1]):
+            try:
+                literal = int(literal_str)
+            except ValueError:
+                raise ValueError(
+                    f"Invalid clause on line {line_number}: '{stripped_line}'\n"
+                    f"Clauses literals must be integers, but '{literal_str}' (index {index}) is not an integer."
+                )
+
+            if literal == 0:
+                raise ValueError(
+                    f"Invalid clause on line {line_number}: '{stripped_line}'\n"
+                    f"Clauses may not contain the variable 0 (found at index {index})."
+                )
+
+            literals.append(literal)
+
+        if not literals:
+            raise ValueError(
+                f"Invalid clause on line {line_number}: '{stripped_line}'\n"
+                "Empty clauses are not allowed."
+            )
+
+        return literals
 
 #
 #==============================================================================
@@ -1334,13 +1442,17 @@ class RC2Stratified(RC2, object):
             activates more soft clauses by invoking
             :func:`activate_clauses`.
         """
-
         if self.done == 0 and self.levl != None:
             # it is a fresh start of the solver
             # i.e. no optimization level is finished yet
 
             # first attempt to get an optimization level
             self.next_level()
+
+            if self.levl is None or self.done >= len(self.blop):
+                # There are no soft clauses. We just need to solve the hard clauses.
+                assert not self.sels
+                self.oracle.solve()
 
             while self.levl != None and self.done < len(self.blop):
                 # add more clauses
@@ -1384,10 +1496,9 @@ class RC2Stratified(RC2, object):
         # extracting a model
         self.model = self.oracle.get_model()
 
-        if self.model is None and self.pool.top == 0:
-            # we seem to have been given an empty formula
-            # so let's transform the None model returned to []
-            self.model = []
+        if self.model is None:
+            # The hard clauses are unsatisfiable, which we signal by returning None.
+            return
 
         self.model = filter(lambda l: abs(l) in self.vmap.i2e, self.model)
         self.model = map(lambda l: int(copysign(self.vmap.i2e[abs(l)], l)), self.model)
@@ -1774,6 +1885,13 @@ if __name__ == '__main__':
         else:  # expecting '*.cnf[,p,+].*'
             formula = CNFPlus(from_file=files[0]).weighted()
 
+        wcnf = WCNF.from_path(files[0])
+        formula = WCNFPlus()
+        for hard_clause in wcnf.hard_clauses:
+            formula.append(hard_clause)
+        for soft_clause, weight in wcnf.soft_clauses:
+            formula.append(soft_clause, weight=weight)
+
         # enabling the competition mode
         if cmode:
             assert cmode in ('a', 'b'), 'Wrong MSE18 mode chosen: {0}'.format(cmode)
@@ -1790,7 +1908,7 @@ if __name__ == '__main__':
                 sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 0)
 
         # deciding whether or not to stratify
-        if blo != 'none' and max(formula.wght) > min(formula.wght):
+        if blo != 'none':
             MXS = RC2Stratified
         else:
             MXS = RC2

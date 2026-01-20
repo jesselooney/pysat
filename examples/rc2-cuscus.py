@@ -822,24 +822,6 @@ class RC2(object):
             if len(self.rels) > 1:
                 # create a new cardunality constraint
                 t = self.create_sum()
-
-                # TODO: implement core exhaustion
-
-                if self.exhaust:
-                    raise Exception("core exhaustion not yet supported")
-
-                ## apply core exhaustion if required
-                #b = self.exhaust_core(t) if self.exhaust else 1
-
-                #if b:
-                #    # save the info about this sum and
-                #    # add its assumption literal
-                #    self.set_bound(t, b, self.minw)
-                #else:
-                #    # impossible to satisfy any of these clauses
-                #    # they must become hard
-                #    for relv in self.rels:
-                #        self.oracle.add_clause([relv])
         else:
             # unit cores are treated differently
             # (their negation is added to the hard part)
@@ -1047,7 +1029,7 @@ class RC2(object):
                 else:
                     break
 
-    def exhaust_core(self, tobj):
+    def exhaust_core(self, sobj):
         """
             Exhaust core by increasing its bound as much as possible.
             Core exhaustion was originally referred to as *cover
@@ -1070,30 +1052,7 @@ class RC2(object):
             recently computed unsatisfiable core and disregarding the
             rest of the formula may be practically effective.
         """
-
-        # the first case is simpler
-        if self.oracle.solve(assumptions=[-tobj.rhs[1]]):
-            return 1
-        else:
-            self.cost += self.minw
-
-        for i in range(2, len(self.rels)):
-            # saving the previous bound
-            self.tobj[-tobj.rhs[i - 1]] = tobj
-            # TODO: rename this; bnds is deprecated and replaced by sum_indices
-            self.bnds[-tobj.rhs[i - 1]] = i - 1
-
-            # increasing the bound
-            self.update_sum(-tobj.rhs[i - 1])
-
-            if self.oracle.solve(assumptions=[-tobj.rhs[i]]):
-                # the bound should be equal to i
-                return i
-
-            # the cost should increase further
-            self.cost += self.minw
-
-        return None
+        raise Exception("exhaust_core is deprecated for rc2-cuscus")
 
     def process_sels(self):
         """
@@ -1284,6 +1243,17 @@ class RC2(object):
             # two) next constraints that become relevant after "removing" the
             # at-most-0 constraint.
             self.reveal_redundant_sum_assumps(t, len(prefixes) - 1, 0)
+
+            if self.exhaust:
+                for i in range(1, len(prefixes)):
+                    if self.oracle.solve(assumptions=[-t.rhs[i]]):
+                        break
+                    else:
+                        self.cost += self.minw
+                        self.garbage.add(-t.rhs[i])
+                        self.reveal_sum_assump(t, len(prefixes) - 1, i + 1)
+
+                self.filter_assumps()
         else:
             raise Exception("Intended for testing on solvers without native cardinality constraints.")
 
@@ -1912,11 +1882,6 @@ if __name__ == '__main__':
         else:
             print("c not using stratification")
             MXS = RC2
-
-        # TODO: implement exhaustion
-        if exhaust:
-            print("c WARNING: core exhaustion enabled but not currently supported; defaulting to no exhaustion")
-            exhaust = False
 
         # starting the solver
         with MXS(formula, solver=solver, adapt=adapt, exhaust=exhaust,

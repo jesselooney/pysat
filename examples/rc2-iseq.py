@@ -1773,7 +1773,7 @@ def parse_options():
     try:
         opts, args = getopt.getopt(sys.argv[1:], 'ab:c:e:hil:mp:s:t:vx',
                 ['adapt', 'block=', 'comp=', 'enum=', 'exhaust', 'help',
-                    'incr', 'blo=', 'minimize', 'process=', 'solver=',
+                    'incr', 'blo=', 'minimize', 'nohard', 'process=', 'solver=',
                     'trim=', 'verbose', 'vnew'])
     except getopt.GetoptError as err:
         sys.stderr.write(str(err).capitalize())
@@ -1788,6 +1788,7 @@ def parse_options():
     incr = False
     blo = 'none'
     minz = False
+    nohard = False
     process = 0
     solver = 'g3'
     trim = 0
@@ -1816,6 +1817,8 @@ def parse_options():
             blo = str(arg)
         elif opt in ('-m', '--minimize'):
             minz = True
+        elif opt == '--nohard':
+            nohard = True
         elif opt in ('-p', '--process'):
             process = int(arg)
         elif opt in ('-s', '--solver'):
@@ -1837,7 +1840,7 @@ def parse_options():
     block = bmap[block]
 
     return adapt, blo, block, cmode, to_enum, exhaust, incr, minz, \
-            process, solver, trim, verbose, vnew, args
+            nohard, process, solver, trim, verbose, vnew, args
 
 
 #
@@ -1875,7 +1878,7 @@ def usage():
 #
 #==============================================================================
 if __name__ == '__main__':
-    adapt, blo, block, cmode, to_enum, exhaust, incr, minz, process, solver, \
+    adapt, blo, block, cmode, to_enum, exhaust, incr, minz, nohard, process, solver, \
             trim, verbose, vnew, files = parse_options()
 
     if files:
@@ -1924,6 +1927,9 @@ if __name__ == '__main__':
                     # no clause hardening in case we enumerate multiple models
                     print('c hardening is disabled for model enumeration')
                     rc2.hard = False
+
+            if nohard:
+                rc2.hard = False
 
             optimum_found = False
             for i, model in enumerate(rc2.enumerate(block=block), 1):

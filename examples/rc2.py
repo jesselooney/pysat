@@ -1980,3 +1980,8 @@ if __name__ == '__main__':
 
                 if verbose > 1:
                     print('c oracle time: {0:.4f}'.format(rc2.oracle_time()))
+
+            if optimum_found:
+                sys.exit(30)
+            else:
+                sys.exit(20)

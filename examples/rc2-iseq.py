@@ -1928,8 +1928,8 @@ if __name__ == '__main__':
                     print('c hardening is disabled for model enumeration')
                     rc2.hard = False
 
-            if nohard:
-                rc2.hard = False
+                if nohard:
+                    rc2.hard = False
 
             optimum_found = False
             for i, model in enumerate(rc2.enumerate(block=block), 1):

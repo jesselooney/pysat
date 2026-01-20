@@ -1930,7 +1930,8 @@ if __name__ == '__main__':
                     print('c hardening is disabled for model enumeration')
                     rc2.hard = False
 
-            if nohard:
+                if not nohard:
+                    print('c WARNING: hardening is not yet supported for rc2-cuscus')
                 rc2.hard = False
 
             optimum_found = False

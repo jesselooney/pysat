@@ -312,8 +312,8 @@ class RC2(object):
         :type verbose: int
     """
 
-    def __init__(self, formula, solver='g3', adapt=False, exhaust=False,
-            incr=False, minz=False, process=0, trim=0, verbose=0):
+    def __init__(self, formula, solver='g3', adapt=False, conf_budget=1000, exhaust=False,
+            incr=False, minz=False, process=0, selector_sorting='none', trim=0, verbose=0):
         """
             Constructor.
         """
@@ -326,6 +326,9 @@ class RC2(object):
         self.adapt = adapt
         self.minz = minz
         self.trim = trim
+
+        self.conf_budget = conf_budget
+        self.selector_sorting = selector_sorting
 
         # oracles are initialised to be None
         self.oracle, self.processor = None, None
@@ -746,7 +749,7 @@ class RC2(object):
             self.adapt_am1()
 
         # main solving loop
-        while not self.oracle.solve(assumptions=self.sels + self.sums):
+        while not self.oracle.solve(assumptions=self.get_sorted_selectors()):
             self.get_core()
 
             if not self.core:
@@ -760,6 +763,17 @@ class RC2(object):
                     len(self.core), len(self.sels) + len(self.sums)))
         
         return True
+
+    def get_sorted_selectors(self):
+        if self.selector_sorting == 'none':
+            return self.sels + self.sums
+        elif self.selector_sorting == 'joint':
+            return sorted(self.sels + self.sums, key=lambda s: self.wght[s], reverse=True)
+        elif self.selector_sorting == 'split':
+            return (
+                sorted(self.sels, key=lambda s: self.wght[s], reverse=True)
+                + sorted(self.sums, key=lambda s: self.wght[s], reverse=True)
+            )
 
     def get_core(self):
         """
@@ -1016,7 +1030,7 @@ class RC2(object):
 
         if self.minz and len(self.core) > 1:
             self.core = sorted(self.core, key=lambda l: self.wght[l])
-            self.oracle.conf_budget(1000)
+            self.oracle.conf_budget(self.conf_budget)
 
             i = 0
             while i < len(self.core):
@@ -1401,8 +1415,8 @@ class RC2Stratified(RC2, object):
         details.
     """
 
-    def __init__(self, formula, solver='g3', adapt=False, blo='div',
-            exhaust=False, incr=False, minz=False, nohard=False, process=0,
+    def __init__(self, formula, solver='g3', adapt=False, blo='div', conf_budget=1000,
+            exhaust=False, incr=False, minz=False, nohard=False, process=0, selector_sorting='none', 
             trim=0, verbose=0):
         """
             Constructor.
@@ -1410,8 +1424,8 @@ class RC2Stratified(RC2, object):
 
         # calling the constructor for the basic version
         super(RC2Stratified, self).__init__(formula, solver=solver,
-                adapt=adapt, exhaust=exhaust, incr=incr, minz=minz,
-                process=process, trim=trim, verbose=verbose)
+                adapt=adapt, conf_budget=conf_budget, exhaust=exhaust, incr=incr, minz=minz, process=process, selector_sorting=selector_sorting,
+                trim=trim, verbose=verbose)
 
         self.levl = 0    # initial optimization level
         self.blop = []   # a list of blo levels
@@ -1736,9 +1750,9 @@ def parse_options():
     """
 
     try:
-        opts, args = getopt.getopt(sys.argv[1:], 'ab:c:e:hil:mp:s:t:vx',
-                ['adapt', 'block=', 'comp=', 'enum=', 'exhaust', 'help',
-                    'incr', 'blo=', 'minimize', 'nohard', 'process=', 'solver=',
+        opts, args = getopt.getopt(sys.argv[1:], 'ab:c:e:f:hil:mo:p:s:t:vx',
+                ['adapt', 'block=', 'comp=', 'conf-budget=', 'enum=', 'exhaust', 'help',
+                    'incr', 'blo=', 'minimize', 'nohard', 'order-selectors=', 'process=', 'solver=',
                     'trim=', 'verbose', 'vnew'])
     except getopt.GetoptError as err:
         sys.stderr.write(str(err).capitalize())
@@ -1749,11 +1763,13 @@ def parse_options():
     block = 'model'
     exhaust = False
     cmode = None
+    conf_budget=1000
     to_enum = 1
     incr = False
     blo = 'none'
     minz = False
     nohard = False
+    selector_sorting = 'none'
     process = 0
     solver = 'g3'
     trim = 0
@@ -1767,6 +1783,9 @@ def parse_options():
             block = str(arg)
         elif opt in ('-c', '--comp'):
             cmode = str(arg)
+        elif opt in ('-f', '--conf-budget'):
+            conf_budget = int(arg)
+            assert conf_budget >= 0
         elif opt in ('-e', '--enum'):
             to_enum = str(arg)
             if to_enum != 'all':
@@ -1784,6 +1803,9 @@ def parse_options():
             minz = True
         elif opt == '--nohard':
             nohard = True
+        elif opt in ('-o', '--order-selectors'):
+            selector_sorting = str(arg)
+            assert selector_sorting in ('none', 'joint', 'split')
         elif opt in ('-p', '--process'):
             process = int(arg)
         elif opt in ('-s', '--solver'):
@@ -1804,8 +1826,8 @@ def parse_options():
     assert block in bmap, 'Unknown solution blocking'
     block = bmap[block]
 
-    return adapt, blo, block, cmode, to_enum, exhaust, incr, minz, \
-            nohard, process, solver, trim, verbose, vnew, args
+    return adapt, blo, block, cmode, conf_budget, to_enum, exhaust, incr, minz, \
+            nohard, process, selector_sorting, solver, trim, verbose, vnew, args
 
 
 #
@@ -1843,7 +1865,7 @@ def usage():
 #
 #==============================================================================
 if __name__ == '__main__':
-    adapt, blo, block, cmode, to_enum, exhaust, incr, minz, nohard, process, solver, \
+    adapt, blo, block, cmode, conf_budget, to_enum, exhaust, incr, minz, nohard, process, selector_sorting, solver, \
             trim, verbose, vnew, files = parse_options()
 
     if files:
@@ -1884,8 +1906,8 @@ if __name__ == '__main__':
             MXS = RC2
 
         # starting the solver
-        with MXS(formula, solver=solver, adapt=adapt, exhaust=exhaust,
-                incr=incr, minz=minz, process=process, trim=trim,
+        with MXS(formula, solver=solver, adapt=adapt, conf_budget=conf_budget, exhaust=exhaust,
+                incr=incr, minz=minz, process=process, selector_sorting=selector_sorting, trim=trim,
                  verbose=verbose) as rc2:
 
             if isinstance(rc2, RC2Stratified):

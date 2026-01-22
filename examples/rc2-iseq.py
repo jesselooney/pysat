@@ -1407,6 +1407,9 @@ class RC2Stratified(RC2, object):
         self.levl = 0    # initial optimization level
         self.blop = []   # a list of blo levels
 
+        # number of dropped clauses of each weight, where dropped means deferred to a lower opt level.
+        self.dropped = collections.defaultdict(lambda: 0)
+
         # BLO strategy
         assert blo and blo in blomap, 'Unknown BLO strategy'
         self.bstr = blomap[blo]
@@ -1485,6 +1488,10 @@ class RC2Stratified(RC2, object):
                 if self.done < len(self.blop):
                     if self.verbose > 1:
                         print('c curr opt:', self.cost)
+                        print(f'c dropped: {sorted(self.dropped.items(), key=lambda x: x[0])}')
+
+                    # Reset the dropped clauses record.
+                    self.dropped = collections.defaultdict(lambda: 0)
 
                     # done with this level
                     if self.hard:
@@ -1683,12 +1690,14 @@ class RC2Stratified(RC2, object):
             if self.done != -1 and self.wght[selv] < self.blop[self.levl]:
                 self.wstr[self.wght[selv]].append(selv)
                 to_deactivate.add(selv)
+                self.dropped[self.wght[selv]] += 1
 
         # marking all remaining literals with small weights to be deactivated
         for l in am1:
             if self.done != -1 and self.wght[l] < self.blop[self.levl]:
                 self.wstr[self.wght[l]].append(l)
                 to_deactivate.add(l)
+                self.dropped[self.wght[l]] += 1
 
         # deactivating unnecessary selectors
         self.sels = [l for l in self.sels if l not in to_deactivate]
@@ -1726,6 +1735,7 @@ class RC2Stratified(RC2, object):
                 if self.done != -1 and self.wght[l] < self.blop[self.levl]:
                     self.wstr[self.wght[l]].append(l)
                     to_deactivate.add(l)
+                    self.dropped[self.wght[l]] += 1
 
             # reuse assumption variable as relaxation
             self.rels.append(-l)
@@ -1760,6 +1770,7 @@ class RC2Stratified(RC2, object):
                 if self.done != -1 and self.wght[l] < self.blop[self.levl]:
                     self.wstr[self.wght[l]].append(l)
                     to_deactivate.add(l)
+                    self.dropped[self.wght[l]] += 1
 
             # increase bound for the sum
             t, b = self.update_sum(l)

@@ -1430,6 +1430,9 @@ class RC2Stratified(RC2, object):
         self.levl = 0    # initial optimization level
         self.blop = []   # a list of blo levels
 
+        # number of dropped clauses of each weight, where dropped means deferred to a lower opt level.
+        self.dropped = collections.defaultdict(lambda: 0)
+
         # BLO strategy
         assert blo and blo in blomap, 'Unknown BLO strategy'
         self.bstr = blomap[blo]
@@ -1508,6 +1511,10 @@ class RC2Stratified(RC2, object):
                 if self.done < len(self.blop):
                     if self.verbose > 1:
                         print('c curr opt:', self.cost)
+                        print(f'c dropped: {sorted(self.dropped.items(), key=lambda x: x[0])}')
+
+                    # Reset the dropped clauses record.
+                    self.dropped = collections.defaultdict(lambda: 0)
 
                     # done with this level
                     if self.hard:
@@ -1698,6 +1705,7 @@ class RC2Stratified(RC2, object):
             if self.done != -1 and self.wght[selv] < self.blop[self.levl]:
                 self.wstr[self.wght[selv]].append(selv)
                 to_deactivate.add(selv)
+                self.dropped[self.wght[selv]] += 1
 
         # Deactivate smaller-weight selectors.
         self.sels = [l for l in self.sels if l not in to_deactivate]
@@ -1739,6 +1747,7 @@ class RC2Stratified(RC2, object):
         if self.done != -1 and self.wght[-lit] < self.blop[self.levl]:
             # Defer activation to a lower level.
             self.wstr[self.wght[-lit]].append(-lit)
+            self.dropped[self.wght[-lit]] += 1
         else:
             # Activate immediately.
             self.sums.append(-lit)

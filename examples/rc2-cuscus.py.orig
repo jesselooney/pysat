@@ -146,7 +146,6 @@ import re
 import six
 from six.moves import range
 import sys
-import time
 
 
 # names of BLO strategies
@@ -342,7 +341,13 @@ class RC2(object):
         self.pool = IDPool(start_from=formula.nv + 1)
         self.wght = {}  # weights of soft clauses
         self.sums = []  # totalizer sum assumptions
-        self.bnds = {}  # a mapping from sum assumptions to totalizer bounds
+        self.sum_indices = {}  # a mapping from sum assumptions to their
+                               # indices, where an index is a pair
+                               # (prefix, bound) denoting the constraint that
+                               # the sum over prefix `prefix` of the associated
+                               # core is at most `bound`.
+        self.prefix_lists = {} # a mapping from seqcounter objects to prefix lists,
+                               # lists of pairs (prefix_len, marginal_weight).
         self.tobj = {}  # a mapping from sum assumptions to totalizer objects
         self.swgt = {}  # a mapping from sum assumptions to their core weights
         self.cost = 0
@@ -744,34 +749,19 @@ class RC2(object):
             self.adapt_am1()
 
         # main solving loop
-        iteration = 0
-        assump_count = len(self.sels) + len(self.sums)
-        solver_start = time.perf_counter()
         while not self.oracle.solve(assumptions=self.get_sorted_selectors()):
-            solver_end = time.perf_counter()
-            print(f"c --- iteration {iteration} ---")
-            print(f"c UNSAT in {solver_end - solver_start:.2e} s")
-
-            old_cost = self.cost
-            old_assump_count = assump_count
-
             self.get_core()
 
             if not self.core:
                 # core is empty, i.e. hard part is unsatisfiable
                 return False
-            
-            maxw = max([self.wght[s] for s in self.core])
-            print(f"c core min weight: {self.minw}; core max weight: {maxw}")
 
             self.process_core()
-            assump_count = len(self.sels) + len(self.sums)
 
-            print(f"c cost: {self.cost} ({self.cost - old_cost:+}); active clauses: {assump_count} ({assump_count - old_assump_count:+})")
+            if self.verbose > 1:
+                print('c cost: {0}; core sz: {1}; soft sz: {2}'.format(self.cost,
+                    len(self.core), len(self.sels) + len(self.sums)))
         
-            solver_start = time.perf_counter()
-            iteration += 1
-
         return True
 
     def get_sorted_selectors(self):
@@ -799,10 +789,7 @@ class RC2(object):
         """
 
         # extracting the core
-        core_start = time.perf_counter()
         self.core = self.oracle.get_core()
-        core_end = time.perf_counter()
-        print(f"c extracted core of size {len(self.core)} in {core_end - core_start:.2e} s")
 
         if self.core:
             # try to reduce the core by trimming
@@ -836,7 +823,6 @@ class RC2(object):
             variables. The totalizer object can be "exhausted"
             depending on the option.
         """
-
         # updating the cost
         self.cost += self.minw
 
@@ -850,19 +836,6 @@ class RC2(object):
             if len(self.rels) > 1:
                 # create a new cardunality constraint
                 t = self.create_sum()
-
-                # apply core exhaustion if required
-                b = self.exhaust_core(t) if self.exhaust else 1
-
-                if b:
-                    # save the info about this sum and
-                    # add its assumption literal
-                    self.set_bound(t, b, self.minw)
-                else:
-                    # impossible to satisfy any of these clauses
-                    # they must become hard
-                    for relv in self.rels:
-                        self.oracle.add_clause([relv])
         else:
             # unit cores are treated differently
             # (their negation is added to the hard part)
@@ -992,35 +965,27 @@ class RC2(object):
 
             :type am1: list(int)
         """
+        # Mark the original constraints as garbage.
+        for l in am1:
+            self.garbage.add(l)
 
-        while len(am1) > 1:
-            # computing am1's weight
-            self.minw = min(map(lambda l: self.wght[l], am1))
+        prefixes, sorted_am1 = self.get_prefixes(am1)
 
-            # pretending am1 to be a core, and the bound is its size - 1
-            self.core_sels, b = am1, len(am1) - 1
+        for prefix_len, marginal_weight in prefixes:
+            # We know `prefix_len - 1` at-least-i clauses in this prefix are false.
+            self.cost += (prefix_len - 1) * marginal_weight
 
-            # incrementing the cost
-            self.cost += b * self.minw
+            # We add the remaining at-least-1 clause that may or may not be
+            # satisfiable, binding it to a new selector variable as usual.
 
-            # splitting and relaxing if needed
-            self.process_sels()
-
-            # updating the list of literals in am1 after splitting the weights
-            am1 = [l for l in am1 if l not in self.garbage]
-
-            # new selector
             selv = self.pool.id()
 
-            # adding a new clause
-            self.oracle.add_clause([-l for l in self.rels] + [-selv])
+            self.oracle.add_clause([l for l in sorted_am1[:prefix_len]] + [-selv])
 
-            # integrating the new selector
             self.sels.append(selv)
-            self.wght[selv] = self.minw
+            self.wght[selv] = marginal_weight
             self.smap[selv] = len(self.wght) - 1
 
-        # removing unnecessary assumptions
         self.filter_assumps()
 
     def trim_core(self):
@@ -1062,7 +1027,7 @@ class RC2(object):
             During this core minimization procedure, all SAT calls are
             dropped after obtaining 1000 conflicts.
         """
-        minz_start = time.perf_counter()
+
         if self.minz and len(self.core) > 1:
             self.core = sorted(self.core, key=lambda l: self.wght[l])
             self.oracle.conf_budget(self.conf_budget)
@@ -1077,10 +1042,8 @@ class RC2(object):
                     i += 1
                 else:
                     break
-        minz_end = time.perf_counter()
-        print(f"c minimized core to size {len(self.core)} in {minz_end - minz_start:.2e} s")
 
-    def exhaust_core(self, tobj):
+    def exhaust_core(self, sobj):
         """
             Exhaust core by increasing its bound as much as possible.
             Core exhaustion was originally referred to as *cover
@@ -1103,29 +1066,7 @@ class RC2(object):
             recently computed unsatisfiable core and disregarding the
             rest of the formula may be practically effective.
         """
-
-        # the first case is simpler
-        if self.oracle.solve(assumptions=[-tobj.rhs[1]]):
-            return 1
-        else:
-            self.cost += self.minw
-
-        for i in range(2, len(self.rels)):
-            # saving the previous bound
-            self.tobj[-tobj.rhs[i - 1]] = tobj
-            self.bnds[-tobj.rhs[i - 1]] = i - 1
-
-            # increasing the bound
-            self.update_sum(-tobj.rhs[i - 1])
-
-            if self.oracle.solve(assumptions=[-tobj.rhs[i]]):
-                # the bound should be equal to i
-                return i
-
-            # the cost should increase further
-            self.cost += self.minw
-
-        return None
+        raise Exception("exhaust_core is deprecated for rc2-cuscus")
 
     def process_sels(self):
         """
@@ -1147,14 +1088,8 @@ class RC2(object):
         self.rels = []
 
         for l in self.core_sels:
-            if self.wght[l] == self.minw:
-                # marking variable as being a part of the core
-                # so that next time it is not used as an assump
-                self.garbage.add(l)
-            else:
-                # do not remove this variable from assumps
-                # since it has a remaining non-zero weight
-                self.wght[l] -= self.minw
+            # Mark the literal as garbage (and omit cloning).
+            self.garbage.add(l)
 
             # reuse assumption variable as relaxation
             self.rels.append(-l)
@@ -1174,26 +1109,108 @@ class RC2(object):
         """
 
         for l in self.core_sums:
-            if self.wght[l] == self.minw:
-                # marking variable as being a part of the core
-                # so that next time it is not used as an assump
-                self.garbage.add(l)
-            else:
-                # do not remove this variable from assumps
-                # since it has a remaining non-zero weight
-                self.wght[l] -= self.minw
+            # Mark the literal as garbage (and omit cloning).
+            self.garbage.add(l)
 
-            # increase bound for the sum
-            t, b = self.update_sum(l)
+            # Get the sequential counters associated with the literal
+            sobj = self.tobj[l]
 
-            # updating bounds and weights
-            if b < len(t.rhs):
-                lnew = -t.rhs[b]
-                if lnew not in self.swgt:
-                    self.set_bound(t, b, self.swgt[l])
+            # Get the index of the literal. That is, over which prefix of the
+            # core the sum is taken, as well as the upper bound on the sum.
+            prefix, bound = self.sum_indices[l]
+
+            # Handle relaxing the constraint.
+            self.reveal_redundant_sum_assumps(sobj, prefix, bound)
 
             # put this assumption to relaxation vars
             self.rels.append(-l)
+
+    def reveal_redundant_sum_assumps(self, sobj, prefix, bound):
+        """
+            Handle relaxing a sum assumption by revealing (introducing) any
+            sum assumptions that were previously implied by it but may no
+            longer be redundant after removing it.
+        """
+
+        # Eagerly reveal the two assumptions this sum immediately implies.
+        self.reveal_sum_assump(sobj, prefix, bound + 1)
+        if prefix >= 1:
+            self.reveal_sum_assump(sobj, prefix - 1, bound)
+
+    def reveal_sum_assump(self, sobj, prefix, bound):
+        """
+            Given a sequential counters object `sobj`, introduce the sum
+            assumption representing that the sum of the literals in prefix
+            `prefix` of the core is at most `bound`. This is
+            :math:`\\overline{o}_i^r` where :math:`i` is `bound` and :math:`r`
+            is `prefix`.
+        """
+        assert bound >= 0
+
+        prefixes = self.prefix_lists[sobj]
+        prefix_len, marginal_weight = prefixes[prefix]
+
+        assert prefix_len <= len(sobj.lits)
+
+        if bound >= prefix_len:
+            # The desired constraint is trivial, so we omit adding it.
+            return
+
+        # Get `lit` such that `-lit` requires that the first `prefix_len`
+        # literals of the core sum to at most `bound`.
+        lit = self.get_sum_assumption(sobj, prefix_len, bound)
+
+        if -lit in self.swgt:
+            # This constraint has already been added, so don't add it again.
+            return
+
+        # Save the metadata for the sum assumption.
+        self.tobj[-lit] = sobj
+        self.sum_indices[-lit] = (prefix, bound)
+        self.wght[-lit] = marginal_weight
+        self.swgt[-lit] = marginal_weight
+
+        # Add the assumption as an enforced constraint.
+        self.sums.append(-lit)
+
+    def get_sum_assumption(self, sobj, prefix_len, bound):
+        assert 0 <= bound
+        assert bound < prefix_len
+        assert prefix_len <= len(sobj.lits)
+
+        # Increase the bound so we are guaranteed to have the literal for the
+        # desired sum assumption.
+        sobj.increase(ubound=bound, top_id=self.pool.top)
+        self.pool.top = sobj.top_id
+        if sobj.nof_new:
+            for cl in sobj.cnf.clauses[-sobj.nof_new:]:
+                self.oracle.add_clause(cl)
+
+        # Return the literal for the desired sum assumption.
+        lit = sobj.get_constraint(prefix_len, bound)
+        assert lit is not None
+        return lit
+
+    def get_prefixes(self, lits):
+        """
+            Sort and compute the prefixes of an iterable of literals.
+
+            Returns (prefixes, sorted_lits), where prefixes is a list of tuples
+            (prefix_len, marginal_weight), such that sorted_lits[:prefix_len]
+            is a prefix of the literals with the given marginal weight.
+        """
+        assert len(lits) > 0
+
+        sorted_lits = sorted(lits, key=lambda l: self.wght[l], reverse=True)
+
+        prefixes = []
+        weights = [self.wght[l] for l in sorted_lits]
+        for i, weight in enumerate(weights[:-1]):
+            if weight != weights[i + 1]:
+                prefixes.append((i + 1, weight - weights[i + 1]))
+        prefixes.append((len(weights), weights[-1]))
+
+        return prefixes, sorted_lits
 
     def create_sum(self, bound=1):
         """
@@ -1214,17 +1231,43 @@ class RC2(object):
             cardinality constraints are used instead of
             :class:`.ITotalizer`.
         """
+        if bound != 1:
+            raise Exception("create_sum not implemented for bound != 1")
 
         if not self.oracle.supports_atmost():  # standard totalizer-based encoding
-            # new totalizer sum
-            t = ISeqCounter(lits=self.rels, ubound=bound, top_id=self.pool.top)
+            core = [-l for l in self.rels]
+            prefixes, sorted_core = self.get_prefixes(core)
+            sorted_rels = [-l for l in sorted_core]
 
+            # new totalizer sum
+            t = ISeqCounter(lits=sorted_rels, ubound=bound, top_id=self.pool.top)
+            
             # updating top variable id
             self.pool.top = t.top_id
 
             # adding its clauses to oracle
             for cl in t.cnf.clauses:
                 self.oracle.add_clause(cl)
+    
+            self.prefix_lists[t] = prefixes
+
+            # We know that at least one relaxation literal must be true (or
+            # else we wouldn't have gotten this core), so the implicit
+            # at-most-0 constraint is falsified. We therefore add the (one or
+            # two) next constraints that become relevant after "removing" the
+            # at-most-0 constraint.
+            self.reveal_redundant_sum_assumps(t, len(prefixes) - 1, 0)
+
+            if self.exhaust:
+                for i in range(1, len(prefixes)):
+                    if self.oracle.solve(assumptions=[-t.rhs[i]]):
+                        break
+                    else:
+                        self.cost += self.minw
+                        self.garbage.add(-t.rhs[i])
+                        self.reveal_sum_assump(t, len(prefixes) - 1, i + 1)
+
+                self.filter_assumps()
         else:
             raise Exception("Intended for testing on solvers without native cardinality constraints.")
 
@@ -1253,38 +1296,8 @@ class RC2(object):
             cardinality constraints are used instead of
             :class:`.ITotalizer`.
         """
-
-        # getting a totalizer object corresponding to assumption
-        t = self.tobj[assump]
-
-        # increment the current bound
-        b = self.bnds[assump] + 1
-
-        if not self.oracle.supports_atmost():  # the case of standard totalizer encoding
-            # increasing its bound
-            t.increase(ubound=b, top_id=self.pool.top)
-
-            # updating top variable id
-            self.pool.top = t.top_id
-
-            # adding its clauses to oracle
-            if t.nof_new:
-                for cl in t.cnf.clauses[-t.nof_new:]:
-                    self.oracle.add_clause(cl)
-        else:  # the case of cardinality constraints represented natively
-            # right-hand side is always equal to the number of input literals
-            rhs = len(t.lits)
-
-            if b < rhs:
-                # creating an additional bound
-                if not t.rhs[b]:
-                    t.rhs[b] = self.pool.id()
-
-                # a new at-most-b constraint
-                amb = [[-t.rhs[b]] * (rhs - b) + t.lits, rhs]
-                self.oracle.add_atmost(*amb)
-
-        return t, b
+        
+        raise Exception("update_sum is deprecated for rc2-cuscus")
 
     def set_bound(self, tobj, rhs, weight=None):
         """
@@ -1303,18 +1316,7 @@ class RC2(object):
             :type weight: int
         """
 
-        if weight is None:
-            # if no specific weight is provided, use the core's weight
-            weight = self.minw
-
-        # saving the sum and its weight in a mapping
-        self.tobj[-tobj.rhs[rhs]] = tobj
-        self.bnds[-tobj.rhs[rhs]] = rhs
-        self.wght[-tobj.rhs[rhs]] = weight
-        self.swgt[-tobj.rhs[rhs]] = weight
-
-        # adding a new assumption to force the sum to be at most rhs
-        self.sums.append(-tobj.rhs[rhs])
+        raise Exception("set_bound is deprecated for rc2-cuscus")
 
     def filter_assumps(self):
         """
@@ -1333,8 +1335,8 @@ class RC2(object):
 
         # cleaning the dictionaries
         for l in list(self.garbage):
-            if l in self.bnds:
-                del self.bnds[l]
+            if l in self.sum_indices:
+                del self.sum_indices[l]
             if l in self.wght:
                 del self.wght[l]
 
@@ -1669,146 +1671,86 @@ class RC2Stratified(RC2, object):
             the detected intrinsic AtMost1 constraints should be
             remembered. The method is a slightly modified version of
             the base method :func:`RC2.process_am1` taking care of
-            this.
+            this. It also handles deactivating smaller-weight clauses.
         """
+        # Smaller-weight clauses to deactivate.
+        to_deactivate = set()
 
-        # assumptions to remove
-        self.garbage = set()
+        # Mark the original constraints as garbage.
+        for l in am1:
+            self.garbage.add(l)
 
-        # clauses to deactivate
-        to_deactivate = set([])
+        prefixes, sorted_am1 = self.get_prefixes(am1)
 
-        while len(am1) > 1:
-            # computing am1's weight
-            self.minw = min(map(lambda l: self.wght[l], am1))
+        for prefix_len, marginal_weight in prefixes:
+            # We know `prefix_len - 1` at-least-i clauses in this prefix are false.
+            self.cost += (prefix_len - 1) * marginal_weight
 
-            # pretending am1 to be a core, and the bound is its size - 1
-            self.core_sels, b = am1, len(am1) - 1
+            # We add the remaining at-least-1 clause that may or may not be
+            # satisfiable, binding it to a new selector variable as usual.
 
-            # incrementing the cost
-            self.cost += b * self.minw
-
-            # splitting and relaxing if needed
-            super(RC2Stratified, self).process_sels()
-
-            # updating the list of literals in am1 after splitting the weights
-            am1 = [l for l in am1 if l not in self.garbage]
-
-            # new selector
             selv = self.pool.id()
 
-            # adding a new clause
-            self.oracle.add_clause([-l for l in self.rels] + [-selv])
+            self.oracle.add_clause([l for l in sorted_am1[:prefix_len]] + [-selv])
 
-            # integrating the new selector
             self.sels.append(selv)
-            self.wght[selv] = self.minw
+            self.wght[selv] = marginal_weight
             self.smap[selv] = len(self.wght) - 1
 
-            # do not forget this newly selector!
+            # Remember the new constraint!
             self.bckp_set.add(selv)
 
+            # Move the constraint to the correct optimization level if it is
+            # too small for the current one.
             if self.done != -1 and self.wght[selv] < self.blop[self.levl]:
                 self.wstr[self.wght[selv]].append(selv)
                 to_deactivate.add(selv)
                 self.dropped[self.wght[selv]] += 1
 
-        # marking all remaining literals with small weights to be deactivated
-        for l in am1:
-            if self.done != -1 and self.wght[l] < self.blop[self.levl]:
-                self.wstr[self.wght[l]].append(l)
-                to_deactivate.add(l)
-                self.dropped[self.wght[l]] += 1
-
-        # deactivating unnecessary selectors
+        # Deactivate smaller-weight selectors.
         self.sels = [l for l in self.sels if l not in to_deactivate]
 
-        # removing unnecessary assumptions
         self.filter_assumps()
 
-    def process_sels(self):
+    def reveal_sum_assump(self, sobj, prefix, bound):
         """
-            A redefined version of :func:`RC2.process_sels`. The only
-            modification affects the clauses whose weight after
-            splitting becomes less than the weight of the current
-            optimization level. Such clauses are deactivated and to be
-            reactivated at a later stage.
+            A redefined version of :func:`RC1.reveal_sum_assump`. The only
+            modification is to add the new assumption literal to the correct
+            optimization level.
         """
+        assert bound >= 0
 
-        # new relaxation variables
-        self.rels = []
+        prefixes = self.prefix_lists[sobj]
+        prefix_len, marginal_weight = prefixes[prefix]
 
-        # selectors that should be deactivated (but not removed completely)
-        to_deactivate = set([])
+        assert prefix_len <= len(sobj.lits)
 
-        for l in self.core_sels:
-            if self.wght[l] == self.minw:
-                # marking variable as being a part of the core
-                # so that next time it is not used as an assump
-                self.garbage.add(l)
-            else:
-                # do not remove this variable from assumps
-                # since it has a remaining non-zero weight
-                self.wght[l] -= self.minw
+        if bound >= prefix_len:
+            # The desired constraint is trivial, so we omit adding it.
+            return
 
-                # deactivate this assumption and put at a lower level
-                # if self.done != -1, i.e. if stratification is disabled
-                if self.done != -1 and self.wght[l] < self.blop[self.levl]:
-                    self.wstr[self.wght[l]].append(l)
-                    to_deactivate.add(l)
-                    self.dropped[self.wght[l]] += 1
+        # Get `lit` such that `-lit` requires that the first `prefix_len`
+        # literals of the core sum to at most `bound`.
+        lit = self.get_sum_assumption(sobj, prefix_len, bound)
 
-            # reuse assumption variable as relaxation
-            self.rels.append(-l)
+        if -lit in self.swgt:
+            # This constraint has already been added, so don't add it again.
+            return
 
-        # deactivating unnecessary selectors
-        self.sels = [l for l in self.sels if l not in to_deactivate]
+        # Save the metadata for the sum assumption.
+        self.tobj[-lit] = sobj
+        self.sum_indices[-lit] = (prefix, bound)
+        self.wght[-lit] = marginal_weight
+        self.swgt[-lit] = marginal_weight
 
-    def process_sums(self):
-        """
-            A redefined version of :func:`RC2.process_sums`. The only
-            modification affects the clauses whose weight after
-            splitting becomes less than the weight of the current
-            optimization level. Such clauses are deactivated and to be
-            reactivated at a later stage.
-        """
-
-        # sums that should be deactivated (but not removed completely)
-        to_deactivate = set([])
-
-        for l in self.core_sums:
-            if self.wght[l] == self.minw:
-                # marking variable as being a part of the core
-                # so that next time it is not used as an assump
-                self.garbage.add(l)
-            else:
-                # do not remove this variable from assumps
-                # since it has a remaining non-zero weight
-                self.wght[l] -= self.minw
-
-                # deactivate this assumption and put at a lower level
-                # if self.done != -1, i.e. if stratification is disabled
-                if self.done != -1 and self.wght[l] < self.blop[self.levl]:
-                    self.wstr[self.wght[l]].append(l)
-                    to_deactivate.add(l)
-                    self.dropped[self.wght[l]] += 1
-
-            # increase bound for the sum
-            t, b = self.update_sum(l)
-
-            # updating bounds and weights
-            if b < len(t.rhs):
-                lnew = -t.rhs[b]
-                if lnew not in self.swgt:
-                    self.set_bound(t, b, self.swgt[l])
-
-            # put this assumption to relaxation vars
-            self.rels.append(-l)
-
-        # deactivating unnecessary sums
-        self.sums = [l for l in self.sums if l not in to_deactivate]
-
-
+        # Add the assumption at the correct optimization level.
+        if self.done != -1 and self.wght[-lit] < self.blop[self.levl]:
+            # Defer activation to a lower level.
+            self.wstr[self.wght[-lit]].append(-lit)
+            self.dropped[self.wght[-lit]] += 1
+        else:
+            # Activate immediately.
+            self.sums.append(-lit)
 #
 #==============================================================================
 def parse_options():
@@ -1966,8 +1908,10 @@ if __name__ == '__main__':
 
         # deciding whether or not to stratify
         if blo != 'none':
+            print("c using stratification")
             MXS = RC2Stratified
         else:
+            print("c not using stratification")
             MXS = RC2
 
         # starting the solver
@@ -1982,8 +1926,9 @@ if __name__ == '__main__':
                     print('c hardening is disabled for model enumeration')
                     rc2.hard = False
 
-                if nohard:
-                    rc2.hard = False
+                if not nohard:
+                    print('c WARNING: hardening is not yet supported for rc2-cuscus')
+                rc2.hard = False
 
             optimum_found = False
             for i, model in enumerate(rc2.enumerate(block=block), 1):

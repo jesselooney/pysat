@@ -146,6 +146,7 @@ import re
 import six
 from six.moves import range
 import sys
+import time
 
 
 # names of BLO strategies
@@ -749,18 +750,33 @@ class RC2(object):
             self.adapt_am1()
 
         # main solving loop
+        iteration = 0
+        assump_count = len(self.sels) + len(self.sums)
+        solver_start = time.perf_counter()
         while not self.oracle.solve(assumptions=self.get_sorted_selectors()):
+            solver_end = time.perf_counter()
+            print(f"c --- iteration {iteration} ---")
+            print(f"c UNSAT in {solver_end - solver_start:.2e} s")
+
+            old_cost = self.cost
+            old_assump_count = assump_count
+
             self.get_core()
 
             if not self.core:
                 # core is empty, i.e. hard part is unsatisfiable
                 return False
+            
+            maxw = max([self.wght[s] for s in self.core])
+            print(f"c core min weight: {self.minw}; core max weight: {maxw}")
 
             self.process_core()
+            assump_count = len(self.sels) + len(self.sums)
 
-            if self.verbose > 1:
-                print('c cost: {0}; core sz: {1}; soft sz: {2}'.format(self.cost,
-                    len(self.core), len(self.sels) + len(self.sums)))
+            print(f"c cost: {self.cost} ({self.cost - old_cost:+}); active clauses: {assump_count} ({assump_count - old_assump_count:+})")
+
+            solver_start = time.perf_counter()
+            iteration += 1
         
         return True
 
@@ -789,7 +805,10 @@ class RC2(object):
         """
 
         # extracting the core
+        core_start = time.perf_counter()
         self.core = self.oracle.get_core()
+        core_end = time.perf_counter()
+        print(f"c extracted core of size {len(self.core)} in {core_end - core_start:.2e} s")
 
         if self.core:
             # try to reduce the core by trimming
@@ -1027,7 +1046,7 @@ class RC2(object):
             During this core minimization procedure, all SAT calls are
             dropped after obtaining 1000 conflicts.
         """
-
+        minz_start = time.perf_counter()
         if self.minz and len(self.core) > 1:
             self.core = sorted(self.core, key=lambda l: self.wght[l])
             self.oracle.conf_budget(self.conf_budget)
@@ -1042,6 +1061,8 @@ class RC2(object):
                     i += 1
                 else:
                     break
+        minz_end = time.perf_counter()
+        print(f"c minimized core to size {len(self.core)} in {minz_end - minz_start:.2e} s")
 
     def exhaust_core(self, sobj):
         """

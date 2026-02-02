@@ -808,7 +808,7 @@ class RC2(object):
         core_start = time.perf_counter()
         self.core = self.oracle.get_core()
         core_end = time.perf_counter()
-        print(f"c extracted core of size {len(self.core)} in {core_end - core_start:.2e} s")
+        print(f"c extracted core of size {len(self.core or [])} in {core_end - core_start:.2e} s")
 
         if self.core:
             # try to reduce the core by trimming
@@ -1155,8 +1155,8 @@ class RC2(object):
 
         # Eagerly reveal the two assumptions this sum immediately implies.
         self.reveal_sum_assump(sobj, prefix, bound + 1)
-        if prefix >= 1:
-            self.reveal_sum_assump(sobj, prefix - 1, bound)
+        #if prefix >= 1:
+        #    self.reveal_sum_assump(sobj, prefix - 1, bound)
 
     def reveal_sum_assump(self, sobj, prefix, bound):
         """
@@ -1277,7 +1277,13 @@ class RC2(object):
             # at-most-0 constraint is falsified. We therefore add the (one or
             # two) next constraints that become relevant after "removing" the
             # at-most-0 constraint.
-            self.reveal_redundant_sum_assumps(t, len(prefixes) - 1, 0)
+            # self.reveal_redundant_sum_assumps(t, len(prefixes) - 1, 0)
+
+            # Reveal all the at-most-0's of the prefixes in addition to the
+            # at-most-1 on the whole core.
+            self.reveal_sum_assump(t, len(prefixes) - 1, 1)
+            for i in range(len(prefixes) - 1):
+                self.reveal_sum_assump(t, i, 0)
 
             if self.exhaust:
                 for i in range(1, len(prefixes)):

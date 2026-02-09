@@ -313,7 +313,7 @@ class RC2(object):
         :type verbose: int
     """
 
-    def __init__(self, formula, solver='g3', adapt=False, conf_budget=1000, exhaust=False,
+    def __init__(self, formula, solver='g3', adapt=False, conf_budget=1000, differential=1, exhaust=False,
             incr=False, minz=False, process=0, selector_sorting='none', trim=0, verbose=0):
         """
             Constructor.
@@ -329,6 +329,7 @@ class RC2(object):
         self.trim = trim
 
         self.conf_budget = conf_budget
+        self.differential = differential
         self.selector_sorting = selector_sorting
 
         # oracles are initialised to be None
@@ -808,7 +809,7 @@ class RC2(object):
         core_start = time.perf_counter()
         self.core = self.oracle.get_core()
         core_end = time.perf_counter()
-        print(f"c extracted core of size {len(self.core)} in {core_end - core_start:.2e} s")
+        print(f"c extracted core of size {len(self.core or [])} in {core_end - core_start:.2e} s")
 
         if self.core:
             # try to reduce the core by trimming
@@ -846,15 +847,8 @@ class RC2(object):
         self.cost += self.minw
 
         if len(self.core_sels) != 1 or len(self.core_sums) > 0:
-            # process selectors in the core
-            self.process_sels()
-
-            # process previously introducded sums in the core
-            self.process_sums()
-
-            if len(self.rels) > 1:
-                # create a new cardunality constraint
-                t = self.create_sum()
+            t = self.create_sum()
+            self.relax_core()
         else:
             # unit cores are treated differently
             # (their negation is added to the hard part)
@@ -863,6 +857,16 @@ class RC2(object):
 
         # remove unnecessary assumptions
         self.filter_assumps()
+
+    def relax_core(self):
+        for s in self.core:
+            assert self.wght[s] >= 0
+            if self.wght[s] == 0:
+                self.garbage.add(s)
+                if s not in self.sels_set:
+                    sobj = self.tobj[s]
+                    prefix, bound = self.sum_indices[s]
+                    self.reveal_redundant_sum_assumps(sobj, prefix, bound)
 
     def adapt_am1(self):
         """
@@ -1155,8 +1159,8 @@ class RC2(object):
 
         # Eagerly reveal the two assumptions this sum immediately implies.
         self.reveal_sum_assump(sobj, prefix, bound + 1)
-        if prefix >= 1:
-            self.reveal_sum_assump(sobj, prefix - 1, bound)
+        #if prefix >= 1:
+        #    self.reveal_sum_assump(sobj, prefix - 1, bound)
 
     def reveal_sum_assump(self, sobj, prefix, bound):
         """
@@ -1233,6 +1237,47 @@ class RC2(object):
 
         return prefixes, sorted_lits
 
+    def get_coerced_prefixes(self, lits):
+        """
+            Sort and compute the prefixes of an iterable of literals.
+
+            Returns (prefixes, sorted_lits), where prefixes is a list of tuples
+            (prefix_len, marginal_weight), such that sorted_lits[:prefix_len]
+            is a prefix of the literals with the given marginal weight.
+        """
+        assert len(lits) > 0
+
+        sorted_lits = sorted(lits, key=lambda l: self.wght[l])
+        weights = [self.wght[l] for l in sorted_lits]
+
+        med_weight = weights[len(weights) // 2]
+        min_weight = weights[0]
+        index = weights.index(med_weight)
+
+        if 2 <= index and index <= len(weights) - 2 and min_weight + self.differential <= med_weight:
+            blocks = [(sorted_lits[:index], min_weight), (sorted_lits[index:], med_weight)]
+        else:
+            blocks = [(sorted_lits, min_weight)]
+
+        blocks.sort(key=lambda block: block[1], reverse=True)
+
+        print(f"c {weights[::-1]}")
+        flattened_core = sum([[weight] * len(lits) for lits, weight in blocks], start=[])
+        print(f"c {flattened_core}")
+
+        for (lits, weight) in blocks:
+            for l in lits:
+                self.wght[l] -= weight
+
+        prefix_len = 0
+        prefixes = []
+        for i, (lits, weight) in enumerate(blocks[:-1]):
+            prefix_len += len(lits)
+            prefixes.append((prefix_len, weight - blocks[i + 1][1]))
+        prefixes.append((len(sorted_lits), blocks[-1][1]))
+
+        return prefixes, sorted_lits[::-1]
+
     def create_sum(self, bound=1):
         """
             Create a totalizer object encoding a cardinality
@@ -1256,8 +1301,7 @@ class RC2(object):
             raise Exception("create_sum not implemented for bound != 1")
 
         if not self.oracle.supports_atmost():  # standard totalizer-based encoding
-            core = [-l for l in self.rels]
-            prefixes, sorted_core = self.get_prefixes(core)
+            prefixes, sorted_core = self.get_coerced_prefixes(self.core)
             sorted_rels = [-l for l in sorted_core]
 
             # new totalizer sum
@@ -1277,7 +1321,13 @@ class RC2(object):
             # at-most-0 constraint is falsified. We therefore add the (one or
             # two) next constraints that become relevant after "removing" the
             # at-most-0 constraint.
-            self.reveal_redundant_sum_assumps(t, len(prefixes) - 1, 0)
+            # self.reveal_redundant_sum_assumps(t, len(prefixes) - 1, 0)
+
+            # Reveal all the at-most-0's of the prefixes in addition to the
+            # at-most-1 on the whole core.
+            self.reveal_sum_assump(t, len(prefixes) - 1, 1)
+            for i in range(len(prefixes) - 1):
+                self.reveal_sum_assump(t, i, 0)
 
             if self.exhaust:
                 for i in range(1, len(prefixes)):
@@ -1436,7 +1486,7 @@ class RC2Stratified(RC2, object):
         details.
     """
 
-    def __init__(self, formula, solver='g3', adapt=False, blo='div', conf_budget=1000,
+    def __init__(self, formula, solver='g3', adapt=False, blo='div', conf_budget=1000, differential=1,
             exhaust=False, incr=False, minz=False, nohard=False, process=0, selector_sorting='none', 
             trim=0, verbose=0):
         """
@@ -1445,7 +1495,7 @@ class RC2Stratified(RC2, object):
 
         # calling the constructor for the basic version
         super(RC2Stratified, self).__init__(formula, solver=solver,
-                adapt=adapt, conf_budget=conf_budget, exhaust=exhaust, incr=incr, minz=minz, process=process, selector_sorting=selector_sorting,
+                adapt=adapt, conf_budget=conf_budget, differential=differential, exhaust=exhaust, incr=incr, minz=minz, process=process, selector_sorting=selector_sorting,
                 trim=trim, verbose=verbose)
 
         self.levl = 0    # initial optimization level
@@ -1772,6 +1822,26 @@ class RC2Stratified(RC2, object):
         else:
             # Activate immediately.
             self.sums.append(-lit)
+
+    def relax_core(self):
+        to_deactivate = set()
+
+        for s in self.core:
+            assert self.wght[s] >= 0
+            if self.wght[s] == 0:
+                self.garbage.add(s)
+                if s not in self.sels_set:
+                    sobj = self.tobj[s]
+                    prefix, bound = self.sum_indices[s]
+                    self.reveal_redundant_sum_assumps(sobj, prefix, bound)
+            elif self.done != -1 and self.wght[s] < self.blop[self.levl]:
+                self.wstr[self.wght[s]].append(s)
+                to_deactivate.add(s)
+                self.dropped[self.wght[s]] += 1
+
+        self.sels = [s for s in self.sels if s not in to_deactivate]
+        self.sums = [s for s in self.sums if s not in to_deactivate]
+
 #
 #==============================================================================
 def parse_options():
@@ -1780,8 +1850,8 @@ def parse_options():
     """
 
     try:
-        opts, args = getopt.getopt(sys.argv[1:], 'ab:c:e:f:hil:mo:p:s:t:vx',
-                ['adapt', 'block=', 'comp=', 'conf-budget=', 'enum=', 'exhaust', 'help',
+        opts, args = getopt.getopt(sys.argv[1:], 'ab:c:d:e:f:hil:mo:p:s:t:vx',
+                ['adapt', 'block=', 'comp=', 'conf-budget=', 'differential=', 'enum=', 'exhaust', 'help',
                     'incr', 'blo=', 'minimize', 'nohard', 'order-selectors=', 'process=', 'solver=',
                     'trim=', 'verbose', 'vnew'])
     except getopt.GetoptError as err:
@@ -1794,6 +1864,7 @@ def parse_options():
     exhaust = False
     cmode = None
     conf_budget=1000
+    differential = 1
     to_enum = 1
     incr = False
     blo = 'none'
@@ -1816,6 +1887,8 @@ def parse_options():
         elif opt in ('-f', '--conf-budget'):
             conf_budget = int(arg)
             assert conf_budget >= 0
+        elif opt in ('-d', '--differential'):
+            differential = int(arg)
         elif opt in ('-e', '--enum'):
             to_enum = str(arg)
             if to_enum != 'all':
@@ -1856,7 +1929,7 @@ def parse_options():
     assert block in bmap, 'Unknown solution blocking'
     block = bmap[block]
 
-    return adapt, blo, block, cmode, conf_budget, to_enum, exhaust, incr, minz, \
+    return adapt, blo, block, cmode, conf_budget, differential, to_enum, exhaust, incr, minz, \
             nohard, process, selector_sorting, solver, trim, verbose, vnew, args
 
 
@@ -1895,7 +1968,7 @@ def usage():
 #
 #==============================================================================
 if __name__ == '__main__':
-    adapt, blo, block, cmode, conf_budget, to_enum, exhaust, incr, minz, nohard, process, selector_sorting, solver, \
+    adapt, blo, block, cmode, conf_budget, differential, to_enum, exhaust, incr, minz, nohard, process, selector_sorting, solver, \
             trim, verbose, vnew, files = parse_options()
 
     if files:
@@ -1936,7 +2009,7 @@ if __name__ == '__main__':
             MXS = RC2
 
         # starting the solver
-        with MXS(formula, solver=solver, adapt=adapt, conf_budget=conf_budget, exhaust=exhaust,
+        with MXS(formula, solver=solver, adapt=adapt, conf_budget=conf_budget, differential=differential, exhaust=exhaust,
                 incr=incr, minz=minz, process=process, selector_sorting=selector_sorting, trim=trim,
                  verbose=verbose) as rc2:
 

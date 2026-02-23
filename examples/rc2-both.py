@@ -1250,16 +1250,11 @@ class RC2(object):
         sorted_lits = sorted(lits, key=lambda l: self.wght[l])
         weights = [self.wght[l] for l in sorted_lits]
 
-        med_weight = weights[len(weights) // 2]
-        min_weight = weights[0]
-        index = weights.index(med_weight)
+        indices = self.partition_lits(sorted_lits, weights)
 
-        if 2 <= index and index <= len(weights) - 2 and min_weight + self.differential <= med_weight:
-            blocks = [(sorted_lits[:index], min_weight), (sorted_lits[index:], med_weight)]
-        else:
-            blocks = [(sorted_lits, min_weight)]
-
-        blocks.sort(key=lambda block: block[1], reverse=True)
+        indices = [0] + indices + [len(lits)]
+        blocks = [(sorted_lits[i:j], min(weights[i:j])) for i, j in zip(indices[:-1], indices[1:])]
+        blocks.reverse()
 
         print(f"c {weights[::-1]}")
         flattened_core = sum([[weight] * len(lits) for lits, weight in blocks], start=[])
@@ -1277,6 +1272,23 @@ class RC2(object):
         prefixes.append((len(sorted_lits), blocks[-1][1]))
 
         return prefixes, sorted_lits[::-1]
+
+    def partition_lits(self, lits, weights):
+        """
+        Given a list of selector literals and corresponding weights in
+        ascending order, return a strictly increasing sequence of indices in
+        (0, len(lits)) representing a partion of the lits.
+        """
+        med_weight = weights[len(weights) // 2]
+        min_weight = weights[0]
+        index = weights.index(med_weight)
+
+        if 2 <= index and index <= len(weights) - 2 and min_weight + self.differential <= med_weight:
+            indices = [index]
+        else:
+            indices = []
+
+        return indices
 
     def create_sum(self, bound=1):
         """

@@ -315,7 +315,7 @@ class RC2(object):
     """
 
     def __init__(self, formula, solver='g3', adapt=False, conf_budget=1000, differential=1, exhaust=False,
-            incr=False, minz=False, process=0, selector_sorting='none', trim=0, verbose=0):
+            incr=False, minz=False, params=[], process=0, selector_sorting='none', trim=0, verbose=0):
         """
             Constructor.
         """
@@ -332,6 +332,7 @@ class RC2(object):
         self.conf_budget = conf_budget
         self.differential = differential
         self.selector_sorting = selector_sorting
+        self.params = params
 
         # oracles are initialised to be None
         self.oracle, self.processor = None, None
@@ -1257,9 +1258,11 @@ class RC2(object):
         blocks = [(sorted_lits[i:j], min(weights[i:j])) for i, j in zip(indices[:-1], indices[1:])]
         blocks.reverse()
 
-        print(f"c {weights[::-1]}")
+        if self.verbose >= 3:
+            print(f"c {weights[::-1]}")
         flattened_core = sum([[weight] * len(lits) for lits, weight in blocks], start=[])
-        print(f"c {flattened_core}")
+        if self.verbose >= 3:
+            print(f"c {flattened_core}")
 
         for (lits, weight) in blocks:
             for l in lits:
@@ -1280,7 +1283,20 @@ class RC2(object):
         ascending order, return a strictly increasing sequence of indices in
         (0, len(lits)) representing a partion of the lits.
         """
-        return self.cut_nth(weights, [1])
+        if not self.params:
+            return []
+
+        if self.params[0] == 'first':
+            cond = self.iteration < int(self.params[1])
+        elif self.params[0] == 'after':
+            cond = self.iteration > int(self.params[1])
+        elif self.params[0] == 'mod':
+            cond = self.iteration % int(self.params[1]) == 0
+
+        if cond:
+            return self.cut_nth(weights, [1])
+        else:
+            return []
 
     def cut_nth(self, weights, indices):
         distinct_weights = sorted(set(weights))
@@ -1507,7 +1523,7 @@ class RC2Stratified(RC2, object):
     """
 
     def __init__(self, formula, solver='g3', adapt=False, blo='div', conf_budget=1000, differential=1,
-            exhaust=False, incr=False, minz=False, nohard=False, process=0, selector_sorting='none', 
+            exhaust=False, incr=False, minz=False, nohard=False, params=[], process=0, selector_sorting='none', 
             trim=0, verbose=0):
         """
             Constructor.
@@ -1515,7 +1531,7 @@ class RC2Stratified(RC2, object):
 
         # calling the constructor for the basic version
         super(RC2Stratified, self).__init__(formula, solver=solver,
-                adapt=adapt, conf_budget=conf_budget, differential=differential, exhaust=exhaust, incr=incr, minz=minz, process=process, selector_sorting=selector_sorting,
+                adapt=adapt, conf_budget=conf_budget, differential=differential, exhaust=exhaust, incr=incr, minz=minz, params=params, process=process, selector_sorting=selector_sorting,
                 trim=trim, verbose=verbose)
 
         self.levl = 0    # initial optimization level
@@ -1872,7 +1888,7 @@ def parse_options():
     try:
         opts, args = getopt.getopt(sys.argv[1:], 'ab:c:d:e:f:hil:mo:p:s:t:vx',
                 ['adapt', 'block=', 'comp=', 'conf-budget=', 'differential=', 'enum=', 'exhaust', 'help',
-                    'incr', 'blo=', 'minimize', 'nohard', 'order-selectors=', 'process=', 'solver=',
+                    'incr', 'blo=', 'minimize', 'nohard', 'order-selectors=', 'params=', 'process=', 'solver=',
                     'trim=', 'verbose', 'vnew'])
     except getopt.GetoptError as err:
         sys.stderr.write(str(err).capitalize())
@@ -1891,6 +1907,7 @@ def parse_options():
     minz = False
     nohard = False
     selector_sorting = 'none'
+    params = []
     process = 0
     solver = 'g3'
     trim = 0
@@ -1929,6 +1946,8 @@ def parse_options():
         elif opt in ('-o', '--order-selectors'):
             selector_sorting = str(arg)
             assert selector_sorting in ('none', 'joint', 'split')
+        elif opt == '--params':
+            params = str(arg).split(",")
         elif opt in ('-p', '--process'):
             process = int(arg)
         elif opt in ('-s', '--solver'):
@@ -1950,7 +1969,7 @@ def parse_options():
     block = bmap[block]
 
     return adapt, blo, block, cmode, conf_budget, differential, to_enum, exhaust, incr, minz, \
-            nohard, process, selector_sorting, solver, trim, verbose, vnew, args
+            nohard, params, process, selector_sorting, solver, trim, verbose, vnew, args
 
 
 #
@@ -1988,7 +2007,7 @@ def usage():
 #
 #==============================================================================
 if __name__ == '__main__':
-    adapt, blo, block, cmode, conf_budget, differential, to_enum, exhaust, incr, minz, nohard, process, selector_sorting, solver, \
+    adapt, blo, block, cmode, conf_budget, differential, to_enum, exhaust, incr, minz, nohard, params, process, selector_sorting, solver, \
             trim, verbose, vnew, files = parse_options()
 
     if files:
@@ -2030,7 +2049,7 @@ if __name__ == '__main__':
 
         # starting the solver
         with MXS(formula, solver=solver, adapt=adapt, conf_budget=conf_budget, differential=differential, exhaust=exhaust,
-                incr=incr, minz=minz, process=process, selector_sorting=selector_sorting, trim=trim,
+                incr=incr, minz=minz, params=params, process=process, selector_sorting=selector_sorting, trim=trim,
                  verbose=verbose) as rc2:
 
             if isinstance(rc2, RC2Stratified):

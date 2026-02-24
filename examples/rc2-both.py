@@ -142,6 +142,7 @@ from pysat.card import ISeqCounter
 from pysat.process import Processor
 from pysat.solvers import Solver, SolverNames
 from pysat._fileio import FileObject
+import random
 import re
 import six
 from six.moves import range
@@ -751,12 +752,12 @@ class RC2(object):
             self.adapt_am1()
 
         # main solving loop
-        iteration = 0
+        self.iteration = 0
         assump_count = len(self.sels) + len(self.sums)
         solver_start = time.perf_counter()
         while not self.oracle.solve(assumptions=self.get_sorted_selectors()):
             solver_end = time.perf_counter()
-            print(f"c --- iteration {iteration} ---")
+            print(f"c --- iteration {self.iteration} ---")
             print(f"c UNSAT in {solver_end - solver_start:.2e} s")
 
             old_cost = self.cost
@@ -777,7 +778,7 @@ class RC2(object):
             print(f"c cost: {self.cost} ({self.cost - old_cost:+}); active clauses: {assump_count} ({assump_count - old_assump_count:+})")
 
             solver_start = time.perf_counter()
-            iteration += 1
+            self.iteration += 1
         
         return True
 
@@ -1279,16 +1280,23 @@ class RC2(object):
         ascending order, return a strictly increasing sequence of indices in
         (0, len(lits)) representing a partion of the lits.
         """
-        med_weight = weights[len(weights) // 2]
-        min_weight = weights[0]
-        index = weights.index(med_weight)
+        return self.cut_nth(weights, [1])
 
-        if 2 <= index and index <= len(weights) - 2 and min_weight + self.differential <= med_weight:
-            indices = [index]
+    def cut_nth(self, weights, indices):
+        distinct_weights = sorted(set(weights))
+        weights_to_cut_on = [w for i, w in enumerate(distinct_weights[1:]) if i in indices]
+        return [weights.index(w) for w in weights_to_cut_on]
+
+    def cut_all(self, weights):
+        return self.cut_nth(weights, range(1, len(weights)))
+
+    def cut_median(self, weights):
+        median_weight = weights[len(weights) // 2]
+        index = weights.index(median_weight)
+        if index > 0:
+            return [index]
         else:
-            indices = []
-
-        return indices
+            return []
 
     def create_sum(self, bound=1):
         """

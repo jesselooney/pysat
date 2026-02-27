@@ -760,9 +760,12 @@ class RC2(object):
             if not self.core:
                 # core is empty, i.e. hard part is unsatisfiable
                 return False
-            
-            maxw = max([self.wght[s] for s in self.core])
-            print(f"c core min weight: {self.minw}; core max weight: {maxw}")
+
+            weights = sorted([self.wght[s] for s in self.core], reverse=True)
+            if self.verbose >= 3:
+                print(f"c original core: {weights}")
+            maxw = max(weights)
+            print(f"c core min weight: {self.minw}; core max weight: {maxw}; core # distinct weights: {len(set(weights))}")
 
             self.process_core()
             assump_count = len(self.sels) + len(self.sums)

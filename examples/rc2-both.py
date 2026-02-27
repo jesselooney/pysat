@@ -769,9 +769,10 @@ class RC2(object):
             if not self.core:
                 # core is empty, i.e. hard part is unsatisfiable
                 return False
-            
-            maxw = max([self.wght[s] for s in self.core])
-            print(f"c core min weight: {self.minw}; core max weight: {maxw}")
+
+            weights = [self.wght[s] for s in self.core]
+            maxw = max(weights)
+            print(f"c core min weight: {self.minw}; core max weight: {maxw}; core # distinct weights: {len(set(weights))}")
 
             self.process_core()
             assump_count = len(self.sels) + len(self.sums)
@@ -1259,10 +1260,10 @@ class RC2(object):
         blocks.reverse()
 
         if self.verbose >= 3:
-            print(f"c {weights[::-1]}")
+            print(f"c original core: {weights[::-1]}")
         flattened_core = sum([[weight] * len(lits) for lits, weight in blocks], start=[])
         if self.verbose >= 3:
-            print(f"c {flattened_core}")
+            print(f"c flattened core: {flattened_core}")
 
         for (lits, weight) in blocks:
             for l in lits:

@@ -1295,8 +1295,10 @@ class RC2(object):
             # Can also think of as the mean over the counts of each weight.
             core_homogeneity = len(weights) / len(set(weights))
             if core_homogeneity >= float(self.params[1]):
+                print("c using full cuscus")
                 return self.cut_all(weights)
             else:
+                print("c using full cloning")
                 return []
         elif self.params[0] == "block_size_gte":
             assert(int(self.params[1]) > 0)

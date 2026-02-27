@@ -1291,21 +1291,32 @@ class RC2(object):
         if not self.params:
             return []
 
-        if self.params[0] == 'first':
-            cond = self.iteration < int(self.params[1])
-        elif self.params[0] == 'after':
-            cond = self.iteration > int(self.params[1])
-        elif self.params[0] == 'mod':
-            cond = self.iteration % int(self.params[1]) == 0
+        if self.params[0] == "core_homogeneity_gte":
+            # Can also think of as the mean over the counts of each weight.
+            core_homogeneity = len(weights) / len(set(weights))
+            if core_homogeneity >= float(self.params[1]):
+                return self.cut_all(weights)
+            else:
+                return []
+        elif self.params[0] == "block_size_gte":
+            assert(int(self.params[1]) > 0)
+            weight_indices = []
+            block_size = 0
+            distinct_weights = sorted(set(weights))
+            for i, w in enumerate(distinct_weights):
+                if block_size >= int(self.params[1]):
+                    weight_indices.append(i)
+                    block_size = 0
+                block_size += weights.count(w)
 
-        if cond:
-            return self.cut_nth(weights, [1])
+            return self.cut_nth(weights, weight_indices)
         else:
+            print("c WARN: Unknown params")
             return []
 
     def cut_nth(self, weights, indices):
         distinct_weights = sorted(set(weights))
-        weights_to_cut_on = [w for i, w in enumerate(distinct_weights[1:]) if i in indices]
+        weights_to_cut_on = [w for i, w in enumerate(distinct_weights) if i in indices]
         return [weights.index(w) for w in weights_to_cut_on]
 
     def cut_all(self, weights):

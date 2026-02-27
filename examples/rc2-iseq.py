@@ -314,7 +314,7 @@ class RC2(object):
     """
 
     def __init__(self, formula, solver='g3', adapt=False, conf_budget=1000, exhaust=False,
-            incr=False, minz=False, process=0, selector_sorting='none', trim=0, verbose=0):
+            incr=False, learn_cores=False, minz=False, process=0, selector_sorting='none', trim=0, verbose=0):
         """
             Constructor.
         """
@@ -330,6 +330,7 @@ class RC2(object):
 
         self.conf_budget = conf_budget
         self.selector_sorting = selector_sorting
+        self.learn_cores = learn_cores
 
         # oracles are initialised to be None
         self.oracle, self.processor = None, None
@@ -820,6 +821,9 @@ class RC2(object):
 
             # core weight
             self.minw = min(map(lambda l: self.wght[l], self.core))
+
+            if self.learn_cores:
+                self.oracle.add_clause([-s for s in self.core])
 
             # dividing the core into two parts
             iter1, iter2 = itertools.tee(self.core)
@@ -1417,7 +1421,7 @@ class RC2Stratified(RC2, object):
     """
 
     def __init__(self, formula, solver='g3', adapt=False, blo='div', conf_budget=1000,
-            exhaust=False, incr=False, minz=False, nohard=False, process=0, selector_sorting='none', 
+            exhaust=False, incr=False, learn_cores=False, minz=False, nohard=False, process=0, selector_sorting='none', 
             trim=0, verbose=0):
         """
             Constructor.
@@ -1425,7 +1429,7 @@ class RC2Stratified(RC2, object):
 
         # calling the constructor for the basic version
         super(RC2Stratified, self).__init__(formula, solver=solver,
-                adapt=adapt, conf_budget=conf_budget, exhaust=exhaust, incr=incr, minz=minz, process=process, selector_sorting=selector_sorting,
+                adapt=adapt, conf_budget=conf_budget, exhaust=exhaust, incr=incr, learn_cores=learn_cores, minz=minz, process=process, selector_sorting=selector_sorting,
                 trim=trim, verbose=verbose)
 
         self.levl = 0    # initial optimization level
@@ -1820,9 +1824,9 @@ def parse_options():
     """
 
     try:
-        opts, args = getopt.getopt(sys.argv[1:], 'ab:c:e:f:hil:mo:p:s:t:vx',
+        opts, args = getopt.getopt(sys.argv[1:], 'ab:c:e:f:hil:Lmo:p:s:t:vx',
                 ['adapt', 'block=', 'comp=', 'conf-budget=', 'enum=', 'exhaust', 'help',
-                    'incr', 'blo=', 'minimize', 'nohard', 'order-selectors=', 'process=', 'solver=',
+                    'incr', 'learn-cores', 'blo=', 'minimize', 'nohard', 'order-selectors=', 'process=', 'solver=',
                     'trim=', 'verbose', 'vnew'])
     except getopt.GetoptError as err:
         sys.stderr.write(str(err).capitalize())
@@ -1836,6 +1840,7 @@ def parse_options():
     conf_budget=1000
     to_enum = 1
     incr = False
+    learn_cores = False
     blo = 'none'
     minz = False
     nohard = False
@@ -1867,6 +1872,8 @@ def parse_options():
             sys.exit(0)
         elif opt in ('-i', '--incr'):
             incr = True
+        elif opt in ('-L', '--learn-cores'):
+            learn_cores = True
         elif opt in ('-l', '--blo'):
             blo = str(arg)
         elif opt in ('-m', '--minimize'):
@@ -1896,7 +1903,7 @@ def parse_options():
     assert block in bmap, 'Unknown solution blocking'
     block = bmap[block]
 
-    return adapt, blo, block, cmode, conf_budget, to_enum, exhaust, incr, minz, \
+    return adapt, blo, block, cmode, conf_budget, to_enum, exhaust, incr, learn_cores, minz, \
             nohard, process, selector_sorting, solver, trim, verbose, vnew, args
 
 
@@ -1935,7 +1942,7 @@ def usage():
 #
 #==============================================================================
 if __name__ == '__main__':
-    adapt, blo, block, cmode, conf_budget, to_enum, exhaust, incr, minz, nohard, process, selector_sorting, solver, \
+    adapt, blo, block, cmode, conf_budget, to_enum, exhaust, incr, learn_cores, minz, nohard, process, selector_sorting, solver, \
             trim, verbose, vnew, files = parse_options()
 
     if files:
@@ -1975,7 +1982,7 @@ if __name__ == '__main__':
 
         # starting the solver
         with MXS(formula, solver=solver, adapt=adapt, conf_budget=conf_budget, exhaust=exhaust,
-                incr=incr, minz=minz, process=process, selector_sorting=selector_sorting, trim=trim,
+                incr=incr, learn_cores=learn_cores, minz=minz, process=process, selector_sorting=selector_sorting, trim=trim,
                  verbose=verbose) as rc2:
 
             if isinstance(rc2, RC2Stratified):

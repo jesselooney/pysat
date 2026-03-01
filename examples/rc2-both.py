@@ -1258,6 +1258,9 @@ class RC2(object):
         weights = [self.wght[l] for l in sorted_lits]
 
         indices = self.partition_lits(sorted_lits, weights)
+        assert 0 not in indices
+        assert len(lits) not in indices
+        assert len(indices) == len(set(indices))
 
         indices = [0] + indices + [len(lits)]
         blocks = [(sorted_lits[i:j], min(weights[i:j])) for i, j in zip(indices[:-1], indices[1:])]
@@ -1312,6 +1315,15 @@ class RC2(object):
                 block_size += weights.count(w)
 
             return self.cut_nth(weights, weight_indices)
+        elif self.params[0] == "stair_size_gte":
+            weight_indices = [
+                i for i, w in enumerate(sorted(set(weights)))
+                if i > 0 and weights.count(w) >= int(self.params[1])
+            ]
+            return self.cut_nth(
+                weights,
+                weight_indices,
+            )
         else:
             print("c WARN: Unknown params")
             return []

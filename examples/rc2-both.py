@@ -334,6 +334,9 @@ class RC2(object):
         self.selector_sorting = selector_sorting
         self.params = params
         self.learn_cores = learn_cores
+        self.wstr_implied = collections.defaultdict(int)  # Counts of *implied* constraints by weight. Used to get
+                                                          # a correct count of the number of small-weight clauses
+                                                          # when doing stratification.
 
         # oracles are initialised to be None
         self.oracle, self.processor = None, None
@@ -1202,6 +1205,9 @@ class RC2(object):
         self.wght[-lit] = marginal_weight
         self.swgt[-lit] = marginal_weight
 
+        # Decrement the count of implied constraints at this weight.
+        self.wstr_implied[marginal_weight] -= 1
+
         # Add the assumption as an enforced constraint.
         self.sums.append(-lit)
 
@@ -1388,6 +1394,18 @@ class RC2(object):
             # two) next constraints that become relevant after "removing" the
             # at-most-0 constraint.
             # self.reveal_redundant_sum_assumps(t, len(prefixes) - 1, 0)
+
+            # At this point, none of the constraints have been added yet. We have a
+            # bunch of implicit constraints all implied by the original at-most-0
+            # (the core we found). Here we count them all up.
+            for prefix_len, marginal_weight in prefixes:
+                self.wstr_implied[marginal_weight] += prefix_len
+            # The above loop over-counts the number of implied constraints due to the
+            # longest prefix (the whole core) by exactly one: namely, it counts the
+            # original at-most-0, even though this is already part of the formula (not
+            # implied) and about to be implicitly removed. So we decrement the count for
+            # that weight by one.
+            self.wstr_implied[prefixes[-1][1]] -= 1
 
             # Reveal all the at-most-0's of the prefixes in addition to the
             # at-most-1 on the whole core.
@@ -1879,6 +1897,9 @@ class RC2Stratified(RC2, object):
         self.sum_indices[-lit] = (prefix, bound)
         self.wght[-lit] = marginal_weight
         self.swgt[-lit] = marginal_weight
+
+        # Decrement the count of implied constraints at this weight.
+        self.wstr_implied[marginal_weight] -= 1
 
         # Add the assumption at the correct optimization level.
         if self.done != -1 and self.wght[-lit] < self.blop[self.levl]:

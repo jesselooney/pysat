@@ -1327,6 +1327,10 @@ class RC2(object):
                 i for i, w in enumerate(sorted(set(weights)))
                 if i > 0 and weights.count(w) >= int(self.params[1])
             ]
+
+            if len(weight_indices) > 0:
+                print(f"c using partial cuscus with {len(weight_indices)} extra cuts")
+
             return self.cut_nth(
                 weights,
                 weight_indices,

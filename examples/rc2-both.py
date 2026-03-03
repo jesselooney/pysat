@@ -1335,6 +1335,10 @@ class RC2(object):
                 weights,
                 weight_indices,
             )
+        elif self.params[0] == "cut_weight":
+            return self.cut_nth(weights, [int(self.params[1])])
+        elif self.params[0] == "cut_median":
+            return self.cut_median(weights)
         else:
             print("c WARN: Unknown params")
             return []

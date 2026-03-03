@@ -873,10 +873,10 @@ class RC2(object):
             assert self.wght[s] >= 0
             if self.wght[s] == 0:
                 self.garbage.add(s)
-                if s not in self.sels_set:
-                    sobj = self.tobj[s]
-                    prefix, bound = self.sum_indices[s]
-                    self.reveal_redundant_sum_assumps(sobj, prefix, bound)
+            if s not in self.sels_set:
+                sobj = self.tobj[s]
+                prefix, bound = self.sum_indices[s]
+                self.reveal_redundant_sum_assumps(sobj, prefix, bound)
 
     def adapt_am1(self):
         """
@@ -1273,6 +1273,7 @@ class RC2(object):
         blocks.reverse()
 
         if self.verbose >= 3:
+            print(f"c core lits: {sorted_lits[::-1]}")
             print(f"c original core: {weights[::-1]}")
         flattened_core = sum([[weight] * len(lits) for lits, weight in blocks], start=[])
         if self.verbose >= 3:
@@ -1805,7 +1806,9 @@ class RC2Stratified(RC2, object):
         self.garbage = set()
 
         # sum of weights of the remaining levels
-        sumw = sum([w * len(self.wstr[w]) for w in self.blop[(self.levl + 1):]])
+        sumw_deferred = sum([w * len(self.wstr[w]) for w in self.wstr if w < self.blop[self.levl]])
+        sumw_implied = sum([w * self.wstr_implied[w] for w in self.wstr_implied if w < self.blop[self.levl]])
+        sumw = sumw_deferred + sumw_implied
 
         # trying to harden selectors and sums
         for s in self.sels + self.sums:
@@ -1917,14 +1920,15 @@ class RC2Stratified(RC2, object):
             assert self.wght[s] >= 0
             if self.wght[s] == 0:
                 self.garbage.add(s)
-                if s not in self.sels_set:
-                    sobj = self.tobj[s]
-                    prefix, bound = self.sum_indices[s]
-                    self.reveal_redundant_sum_assumps(sobj, prefix, bound)
             elif self.done != -1 and self.wght[s] < self.blop[self.levl]:
                 self.wstr[self.wght[s]].append(s)
                 to_deactivate.add(s)
                 self.dropped[self.wght[s]] += 1
+
+            if s not in self.sels_set:
+                sobj = self.tobj[s]
+                prefix, bound = self.sum_indices[s]
+                self.reveal_redundant_sum_assumps(sobj, prefix, bound)
 
         self.sels = [s for s in self.sels if s not in to_deactivate]
         self.sums = [s for s in self.sums if s not in to_deactivate]
@@ -2113,9 +2117,7 @@ if __name__ == '__main__':
                     print('c hardening is disabled for model enumeration')
                     rc2.hard = False
 
-                if not nohard:
-                    print('c WARNING: hardening is not yet supported for rc2-cuscus')
-                rc2.hard = False
+                rc2.hard = not nohard
 
             optimum_found = False
             for i, model in enumerate(rc2.enumerate(block=block), 1):

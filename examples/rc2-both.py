@@ -1740,10 +1740,14 @@ class RC2Stratified(RC2, object):
             wght = self.blop[self.levl]
 
             # number of selectors with weight less than current weight
-            numr = sum([len(self.wstr[w]) for w in self.blop[(self.levl + 1):]])
+            numr_deferred = sum([len(self.wstr[w]) for w in self.wstr if w < self.blop[self.levl]])
+            numr_implied = sum([self.wstr_implied[w] for w in self.wstr_implied if w < self.blop[self.levl]])
+            numr = numr_deferred + numr_implied
 
             # sum of their weights
-            sumr = sum([w * len(self.wstr[w]) for w in self.blop[(self.levl + 1):]])
+            sumr_deferred = sum([w * len(self.wstr[w]) for w in self.wstr if w < self.blop[self.levl]])
+            sumr_implied = sum([w * self.wstr_implied[w] for w in self.wstr_implied if w < self.blop[self.levl]])
+            sumr = sumr_deferred + sumr_implied
 
             # partial BLO
             if wght > sumr and sumr != 0:
@@ -1755,19 +1759,20 @@ class RC2Stratified(RC2, object):
 
             # last resort = cluster-based stratification
             if clu_str:
+                print("c WARN: cluster-based stratification not yet supported for rc2-both.py")
                 # is the distance from current weight to the cluster
                 # being built larger than the distance to the mean of
                 # smaller weights?
-                numc = sum([len(self.wstr[self.blop[l]]) for l in cluster])
-                sumc = sum([self.blop[l] * len(self.wstr[self.blop[l]]) for l in cluster])
+                #numc = sum([len(self.wstr[self.blop[l]]) for l in cluster])
+                #sumc = sum([self.blop[l] * len(self.wstr[self.blop[l]]) for l in cluster])
 
-                if abs(wght - sumc / numc) > abs(wght - sumr / numr):
-                    # remaining weights are too far from the cluster; stop
-                    # here and report the splitting to be last-added weight
-                    self.levl = cluster[-1]
-                    break
+                #if abs(wght - sumc / numc) > abs(wght - sumr / numr):
+                #    # remaining weights are too far from the cluster; stop
+                #    # here and report the splitting to be last-added weight
+                #    self.levl = cluster[-1]
+                #    break
 
-                cluster.append(self.levl)
+                #cluster.append(self.levl)
 
             self.levl += 1
 

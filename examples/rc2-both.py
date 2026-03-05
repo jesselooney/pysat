@@ -1335,10 +1335,22 @@ class RC2(object):
                 weights,
                 weight_indices,
             )
-        elif self.params[0] == "cut_weight":
-            return self.cut_nth(weights, [int(self.params[1])])
-        elif self.params[0] == "cut_median":
-            return self.cut_median(weights)
+        elif self.params[0] == "stair_core":
+            weight_indices = [
+                i for i, w in enumerate(sorted(set(weights)))
+                if i > 0 and weights.count(w) >= int(self.params[1])
+            ]
+
+            if len(weight_indices) > 0 and len(weights) >= int(self.params[2]):
+                print(f"c using partial cuscus with {len(weight_indices)} extra cuts")
+
+                return self.cut_nth(
+                    weights,
+                    weight_indices,
+                )
+            else:
+                print(f"c using full cloning")
+                return []
         else:
             print("c WARN: Unknown params")
             return []

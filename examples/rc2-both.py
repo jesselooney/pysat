@@ -1289,6 +1289,12 @@ class RC2(object):
             prefix_len += len(lits)
             prefixes.append((prefix_len, weight - blocks[i + 1][1]))
         prefixes.append((len(sorted_lits), blocks[-1][1]))
+        
+        if self.verbose >= 3:
+            if len(prefixes) > 1:
+                print(f"c applying partial cuscus with {len(prefixes)} prefixes")
+            else:
+                print(f"c applying full cloning")
 
         return prefixes, sorted_lits[::-1]
 
@@ -1305,10 +1311,8 @@ class RC2(object):
             # Can also think of as the mean over the counts of each weight.
             core_homogeneity = len(weights) / len(set(weights))
             if core_homogeneity >= float(self.params[1]):
-                print("c using full cuscus")
                 return self.cut_all(weights)
             else:
-                print("c using full cloning")
                 return []
         elif self.params[0] == "block_size_gte":
             assert(int(self.params[1]) > 0)
@@ -1328,9 +1332,6 @@ class RC2(object):
                 if i > 0 and weights.count(w) >= int(self.params[1])
             ]
 
-            if len(weight_indices) > 0:
-                print(f"c using partial cuscus with {len(weight_indices)} extra cuts")
-
             return self.cut_nth(
                 weights,
                 weight_indices,
@@ -1342,15 +1343,16 @@ class RC2(object):
             ]
 
             if len(weight_indices) > 0 and len(weights) >= int(self.params[2]):
-                print(f"c using partial cuscus with {len(weight_indices)} extra cuts")
-
                 return self.cut_nth(
                     weights,
                     weight_indices,
                 )
             else:
-                print(f"c using full cloning")
                 return []
+        elif self.params[0] == "clone":
+            return []
+        elif self.params[0] == "cuscus":
+            return self.cut_all(weights)
         else:
             print("c WARN: Unknown params")
             return []

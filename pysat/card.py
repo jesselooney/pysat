@@ -804,7 +804,46 @@ class ITotalizer(object):
 #
 #==============================================================================
 class ISeqCounter(object):
-    """This class implements an iterative sequential counter encoding. It attempts to match the interface of ITotalizer.
+    """
+        This class implements an iterative sequential-counter encoding. Like
+        :class:`ITotalizer`, this class is not abstract and its objects once
+        created can be reused several times: the bound can be increased, and
+        the internal state can be read out as standalone constraint literals
+        via :meth:`get_constraint`. The interface intentionally mirrors
+        :class:`ITotalizer`'s.
+
+        The constructor of the class object takes 3 default arguments.
+
+        :param lits: a list of literals to sum.
+        :param ubound: the largest potential bound to use.
+        :param top_id: top variable identifier used so far.
+
+        :type lits: iterable(int)
+        :type ubound: int
+        :type top_id: integer or None
+
+        The encoding of the current counter can be accessed with the use of
+        :class:`.CNF` variable stored as ``self.cnf``. Potential bounds **are
+        not** imposed by default but can be added as unit clauses in the final
+        CNF formula. The bounds are stored in the list of Boolean variables as
+        ``self.rhs``. A concrete bound :math:`k` can be enforced by considering
+        a unit clause ``-self.rhs[k]``. **Note** that ``-self.rhs[0]`` enforces
+        all literals of the sum to be *false*.
+
+        An :class:`ISeqCounter` object should be deleted if it is not needed
+        anymore.
+
+        Possible usage of the class is shown below:
+
+        .. code-block:: python
+
+            >>> from pysat.card import ISeqCounter
+            >>> t = ISeqCounter(lits=[1, 2, 3], ubound=1)
+            >>> print(t.cnf.clauses)
+            [[-1, 4], [-4, 5], [-2, 5], [-5, 6], [-3, 6], [-4, -2, 7], [-7, 8], [-5, -3, 8]]
+            >>> print(t.rhs)
+            [6, 8]
+            >>> t.delete()
     """
     def __init__(self, lits=[], ubound=1, top_id=None):
         """
@@ -834,11 +873,11 @@ class ISeqCounter(object):
 
     def new(self, lits=[], ubound=1, top_id=None):
         """
-            The actual constructor of :class:`ITotalizer`. Invoked from
-            ``self.__init__()``. Creates an object of :class:`ITotalizer` given
+            The actual constructor of :class:`ISeqCounter`. Invoked from
+            ``self.__init__()``. Creates an object of :class:`ISeqCounter` given
             a list of literals in the sum, the largest potential bound to
             consider, as well as the top variable identifier used so far. See
-            the description of :class:`ITotalizer` for details.
+            the description of :class:`ISeqCounter` for details.
         """
 
         self.lits = list(lits)
@@ -865,7 +904,7 @@ class ISeqCounter(object):
 
     def delete(self):
         """
-            Destroys a previously constructed :class:`ITotalizer` object.
+            Destroys a previously constructed :class:`ISeqCounter` object.
             Internal variables ``self.cnf`` and ``self.rhs`` get cleaned.
         """
 
@@ -911,7 +950,7 @@ class ISeqCounter(object):
     def increase(self, ubound=1, top_id=None):
         """
             Increases a potential upper bound that can be imposed on the
-            literals in the sum of an existing :class:`ITotalizer` object to a
+            literals in the sum of an existing :class:`ISeqCounter` object to a
             new value.
 
             :param ubound: a new upper bound.
@@ -924,7 +963,7 @@ class ISeqCounter(object):
             the one used in ``self``.
 
             This method creates additional clauses encoding the existing
-            totalizer tree up to the new upper bound given and appends them to
+            counter up to the new upper bound given and appends them to
             the list of clauses of :class:`.CNF` ``self.cnf``. The number of
             newly created clauses is stored in variable ``self.nof_new``.
 
@@ -935,20 +974,20 @@ class ISeqCounter(object):
 
             .. code-block:: python
 
-                >>> from pysat.card import ITotalizer
-                >>> t = ITotalizer(lits=[1, 2, 3], ubound=1)
+                >>> from pysat.card import ISeqCounter
+                >>> t = ISeqCounter(lits=[1, 2, 3], ubound=1)
                 >>> print(t.cnf.clauses)
-                [[-2, 4], [-1, 4], [-1, -2, 5], [-4, 6], [-5, 7], [-3, 6], [-3, -4, 7]]
+                [[-1, 4], [-4, 5], [-2, 5], [-5, 6], [-3, 6], [-4, -2, 7], [-7, 8], [-5, -3, 8]]
                 >>> print(t.rhs)
-                [6, 7]
+                [6, 8]
                 >>>
                 >>> t.increase(ubound=2)
                 >>> print(t.cnf.clauses)
-                [[-2, 4], [-1, 4], [-1, -2, 5], [-4, 6], [-5, 7], [-3, 6], [-3, -4, 7], [-3, -5, 8]]
+                [[-1, 4], [-4, 5], [-2, 5], [-5, 6], [-3, 6], [-4, -2, 7], [-7, 8], [-5, -3, 8], [-7, -3, 9]]
                 >>> print(t.cnf.clauses[-t.nof_new:])
-                [[-3, -5, 8]]
+                [[-7, -3, 9]]
                 >>> print(t.rhs)
-                [6, 7, 8]
+                [6, 8, 9]
                 >>> t.delete()
         """
 
@@ -974,8 +1013,23 @@ class ISeqCounter(object):
 
     def get_constraint(self, prefix_len, bound):
         """
-            Get the literal whose negation requires that the first `prefix_len`
-            lits of `self.lits` sum to at most `bound`.
+            Get the literal whose negation requires that the sum of the first
+            ``prefix_len`` literals of ``self.lits`` is at most ``bound``.
+            This lets a caller reuse the internal state of a partially-built
+            counter as a standalone constraint, rather than only ever
+            asserting the counter's own top-level bound in ``self.rhs``.
+
+            :param prefix_len: length of the prefix of ``self.lits`` to sum.
+            :param bound: an upper bound already covered by the counter, i.e.
+                ``bound < len(self.rhs)``.
+
+            :type prefix_len: int
+            :type bound: int
+
+            :returns: the requested literal, or ``None`` if ``prefix_len`` and
+                ``bound`` do not satisfy ``0 <= bound < len(self.rhs)`` and
+                ``bound < prefix_len <= len(self.lits)``.
+            :rtype: int or None
         """
         if 0 <= bound < len(self.rhs) and bound < prefix_len <= len(self.lits):
             return pycard.iseq_get(self.tobj,

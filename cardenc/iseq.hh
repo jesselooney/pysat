@@ -14,6 +14,8 @@
 #include <vector>
 #include <deque>
 #include "clset.hh"
+#include "ptypes.hh"
+#include "utils.hh"
 
 using namespace std;
 
@@ -34,13 +36,15 @@ struct SeqState {
 //=============================================================================
 void _iseq_add_atmost0(SeqState *state, ClauseSet& dest, int& top)
 {
-    assert(rhs.size() == 0);
-    assert(lhs.size() > 0);
+    assert(state->rhs.size() == 0);
+    assert(state->lhs.size() > 0);
 
     int n = state->lhs.size();
 
     // s_1^1 <-- x_0. We could just reuse the literal for x_0, but it is better
-    // to have our own copy. Some use cases assume this behavior.
+    // to have our own copy: iseq_get() hands out s-variables as standalone
+    // constraint literals, and callers should be able to treat s_1^1 as
+    // distinct from the input literal x_0.
     int s11 = mk_yvar(top, state->s_vars, make_pair(1, 1));
     int x0 = state->lhs[0];
     dest.create_binary_clause(-x0, s11);
@@ -63,8 +67,8 @@ void _iseq_add_atmost0(SeqState *state, ClauseSet& dest, int& top)
 //=============================================================================
 void _iseq_add_atmostk(SeqState *state, ClauseSet& dest, int& top, unsigned k)
 {
-    assert(rhs.size() == k);
-    assert(lhs.size() > k);
+    assert(state->rhs.size() == k);
+    assert(state->lhs.size() > k);
 
     int n = state->lhs.size();
 
@@ -90,12 +94,12 @@ void _iseq_add_atmostk(SeqState *state, ClauseSet& dest, int& top, unsigned k)
 
 //
 //=============================================================================
-SeqState *iseq_new(ClauseSet& dest, vector<int>& lhs, long unsigned rhs, int& top)
+SeqState *iseq_new(ClauseSet& dest, vector<int>& lhs, unsigned rhs, int& top)
 {
     SeqState *state = new SeqState();
     state->lhs = lhs;
 
-    unsigned kmin = std::min(rhs + 1, state->lhs.size());
+    unsigned kmin = std::min(rhs + 1, (unsigned)state->lhs.size());
     state->rhs.reserve(kmin);
 
     for (unsigned i = 0; i < kmin; i++) {
@@ -111,12 +115,12 @@ SeqState *iseq_new(ClauseSet& dest, vector<int>& lhs, long unsigned rhs, int& to
 
 //
 //=============================================================================
-void iseq_increase(SeqState *state, ClauseSet& dest, long unsigned rhs, int& top)
+void iseq_increase(SeqState *state, ClauseSet& dest, unsigned rhs, int& top)
 {
-    unsigned kmin = std::min(rhs + 1, state->lhs.size());
+    unsigned kmin = std::min(rhs + 1, (unsigned)state->lhs.size());
     state->rhs.reserve(kmin);
 
-    for (unsigned i = state->rhs.size(); i < kmin; i++) {
+    for (unsigned i = (unsigned)state->rhs.size(); i < kmin; i++) {
         if (i == 0) {
             _iseq_add_atmost0(state, dest, top);
         } else {
@@ -127,15 +131,14 @@ void iseq_increase(SeqState *state, ClauseSet& dest, long unsigned rhs, int& top
 
 //
 //=============================================================================
-int iseq_get(SeqState *state, int prefix_len, long unsigned rhs) {
-    assert(0 <= rhs);
-    assert(rhs < rhs.size());
+int iseq_get(SeqState *state, int prefix_len, unsigned bound) {
+    assert(bound < state->rhs.size());
 
-    assert(rhs < prefix_len);
-    assert(prefix_len <= lhs.size());
+    assert((int)bound < prefix_len);
+    assert(prefix_len <= (int)state->lhs.size());
 
     // The above assertions ensure that this key exists in the map.
-    return state->s_vars.at(make_pair(rhs + 1, prefix_len));
+    return state->s_vars.at(make_pair(bound + 1, prefix_len));
 }
 
 //

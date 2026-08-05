@@ -908,31 +908,43 @@ static PyObject *py_iseq_new(PyObject *self, PyObject *args)
 	if (main_thread)
 		PyOS_setsig(SIGINT, sig_save);
 
-	// creating the resulting clause set
-	PyObject *dest_obj = PyList_New(dest.size());
-	for (size_t i = 0; i < dest.size(); ++i) {
-		PyObject *cl_obj = PyList_New(dest[i].size());
+	PyIntCache cache = {};
+	PyObject *dest_obj = clauseset_to_pylist(dest, &cache);
+	pyint_cache_clear(&cache);
+	if (dest_obj == NULL)
+		return NULL;
 
-		for (size_t j = 0; j < dest[i].size(); ++j) {
-			PyObject *lit_obj = pyint_from_cint(dest[i][j]);
-			PyList_SetItem(cl_obj, j, lit_obj);
-		}
-
-		PyList_SetItem(dest_obj, i, cl_obj);
+	PyObject *ubs_obj = vector_to_pylist(state->rhs);
+	if (ubs_obj == NULL) {
+		Py_DECREF(dest_obj);
+		return NULL;
+	}
+	PyObject *state_obj = void_to_pyobj((void *)state);
+	if (state_obj == NULL) {
+		Py_DECREF(dest_obj);
+		Py_DECREF(ubs_obj);
+		return NULL;
+	}
+	PyObject *top_obj = pyint_from_cint(top);
+	if (top_obj == NULL) {
+		Py_DECREF(dest_obj);
+		Py_DECREF(ubs_obj);
+		Py_DECREF(state_obj);
+		return NULL;
 	}
 
-	// creating the upper-bounds (right-hand side)
-	PyObject *ubs_obj = PyList_New(state->rhs.size());
-	for (size_t i = 0; i < state->rhs.size(); ++i) {
-		PyObject *ub_obj = pyint_from_cint(state->rhs[i]);
-		PyList_SetItem(ubs_obj, i, ub_obj);
+	PyObject *ret = PyTuple_New(4);
+	if (ret == NULL) {
+		Py_DECREF(dest_obj);
+		Py_DECREF(ubs_obj);
+		Py_DECREF(state_obj);
+		Py_DECREF(top_obj);
+		return NULL;
 	}
-
-	PyObject *ret = Py_BuildValue("OOOn", void_to_pyobj((void *)state),
-				dest_obj, ubs_obj, (Py_ssize_t)top);
-
-	Py_DECREF(dest_obj);
-	Py_DECREF( ubs_obj);
+	PyTuple_SET_ITEM(ret, 0, state_obj);
+	PyTuple_SET_ITEM(ret, 1, dest_obj);
+	PyTuple_SET_ITEM(ret, 2, ubs_obj);
+	PyTuple_SET_ITEM(ret, 3, top_obj);
 	return ret;
 }
 
@@ -968,30 +980,34 @@ static PyObject *py_iseq_inc(PyObject *self, PyObject *args)
 	if (main_thread)
 		PyOS_setsig(SIGINT, sig_save);
 
-	// creating the resulting clause set
-	PyObject *dest_obj = PyList_New(dest.size());
-	for (size_t i = 0; i < dest.size(); ++i) {
-		PyObject *cl_obj = PyList_New(dest[i].size());
+	PyIntCache cache = {};
+	PyObject *dest_obj = clauseset_to_pylist(dest, &cache);
+	pyint_cache_clear(&cache);
+	if (dest_obj == NULL)
+		return NULL;
 
-		for (size_t j = 0; j < dest[i].size(); ++j) {
-			PyObject *lit_obj = pyint_from_cint(dest[i][j]);
-			PyList_SetItem(cl_obj, j, lit_obj);
-		}
-
-		PyList_SetItem(dest_obj, i, cl_obj);
+	PyObject *ubs_obj = vector_to_pylist(state->rhs);
+	if (ubs_obj == NULL) {
+		Py_DECREF(dest_obj);
+		return NULL;
+	}
+	PyObject *top_obj = pyint_from_cint(top);
+	if (top_obj == NULL) {
+		Py_DECREF(dest_obj);
+		Py_DECREF(ubs_obj);
+		return NULL;
 	}
 
-	// creating the upper-bounds (right-hand side)
-	PyObject *ubs_obj = PyList_New(state->rhs.size());
-	for (size_t i = 0; i < state->rhs.size(); ++i) {
-		PyObject *ub_obj = pyint_from_cint(state->rhs[i]);
-		PyList_SetItem(ubs_obj, i, ub_obj);
+	PyObject *ret = PyTuple_New(3);
+	if (ret == NULL) {
+		Py_DECREF(dest_obj);
+		Py_DECREF(ubs_obj);
+		Py_DECREF(top_obj);
+		return NULL;
 	}
-
-	PyObject *ret = Py_BuildValue("OOn", dest_obj, ubs_obj, (Py_ssize_t)top);
-
-	Py_DECREF(dest_obj);
-	Py_DECREF( ubs_obj);
+	PyTuple_SET_ITEM(ret, 0, dest_obj);
+	PyTuple_SET_ITEM(ret, 1, ubs_obj);
+	PyTuple_SET_ITEM(ret, 2, top_obj);
 	return ret;
 }
 
